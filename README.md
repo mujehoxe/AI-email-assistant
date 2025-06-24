@@ -45,6 +45,8 @@ The app comes with default settings for Outlook, but you can configure it to wor
 - **Gmail**: smtp.gmail.com:587
 - **Yahoo**: smtp.mail.yahoo.com:587
 
+The application will automatically try to infer the correct SMTP settings based on your email domain.
+
 ## Getting an App Password
 
 If you have two-factor authentication enabled on your email account, you'll need to generate an app password:
@@ -79,3 +81,20 @@ If you have two-factor authentication enabled on your email account, you'll need
 1. Go to the Settings section in the sidebar
 2. Enter your name, which will appear in the signature of your emails
 3. Your templates will be updated with your name in the signature
+
+## Deployment
+
+### Docker Deployment
+
+You can run this application using Docker:
+
+```bash
+# Build and run with Docker Compose
+docker-compose up --build
+```
+
+### Render Deployment
+
+This application can be deployed to Render using the provided `render.yaml` file.
+
+For detailed deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
