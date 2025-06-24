@@ -86,7 +86,7 @@ def cancel_ai_request():
 
 def generate_improved_template(job_description, resume_content, current_template):
     """Generate an improved template based on job description and resume"""
-    global request_canceled
+    # We only need to read the global variable, not modify it
     reset_cancel_flag()
 
     try:
