@@ -238,10 +238,138 @@ def render_email_form():
     col1, col2 = st.columns([3, 2])
 
     with col1:
-        # REORDERED SECTIONS: Resume and Job Description first
+        # 2. Job Description section
+        st.markdown("### Job Description")
 
-        # 1. Resume section
-        st.header("Resume Upload")
+        # Get job description from session state or empty string
+        job_description = st.text_area(
+            "Paste job description here",
+            value=st.session_state.get("job_description", ""),
+            height=250,
+        )
+
+        # Save to session state without automatic extraction
+        if job_description:
+            st.session_state["job_description"] = job_description
+
+        # 3. AI Template Generator section
+        st.header("AI Template Generator")
+
+        # Check API server status
+        server_status = "Not Running"
+        if check_api_server_status():
+            server_status = "Running"
+
+        st.markdown(f"API Server Status: **{server_status}**")
+
+        # Get available models
+        if "ai_models" not in st.session_state:
+            st.session_state.ai_models = get_available_models()
+
+        model_count = len(st.session_state.ai_models)
+        st.markdown(f"Available Models: **{model_count}**")
+
+        # Find default model index
+        default_index = 0
+        if DEFAULT_MODEL in st.session_state.ai_models:
+            default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
+
+        # Model selection
+        selected_model = st.selectbox(
+            "Select AI Model",
+            options=st.session_state.ai_models,
+            index=default_index,
+        )
+
+        # Refresh models button
+        if st.button("Refresh Models List"):
+            st.session_state.ai_models = get_available_models()
+            st.experimental_rerun()
+
+        # Generate template button
+        generate_col, cancel_col = st.columns([3, 1])
+
+        with generate_col:
+            if generate_button := st.button(
+                "Generate Email Template & Extract Info",
+                disabled=is_request_in_progress()
+                or not job_description
+                or not st.session_state.resume_content,
+            ):
+                with st.spinner("Generating template..."):
+                    # Get current template for reference
+                    current_template = st.session_state.current_template
+
+                    # Generate template using cached resume content
+                    result = generate_improved_template(
+                        job_description,
+                        st.session_state.resume_content,
+                        current_template,
+                        model=selected_model,
+                    )
+
+                    # Store result in session state
+                    st.session_state.result = result
+
+                    if result.get("success", False):
+                        template = result["template"]
+
+                        # Update template in session state
+                        st.session_state.current_template = {
+                            "greeting": template.get("greeting", ""),
+                            "body": template.get("body", ""),
+                            "signature": template.get("signature", ""),
+                        }
+
+                        # Update other extracted information if they exist and are not empty
+                        if template.get("position"):
+                            st.session_state.position = template["position"]
+                            st.success(f"Position extracted: {template['position']}")
+
+                        if template.get("employer") and template["employer"]:
+                            st.session_state.company_name = template["employer"]
+                            st.success(
+                                f"Company name extracted: {template['employer']}"
+                            )
+
+                        elif template.get("company") and template["company"]:
+                            st.session_state.company_name = template["company"]
+                            st.success(f"Company name extracted: {template['company']}")
+
+                        if template.get("subject"):
+                            st.session_state.subject = template["subject"]
+
+                        if template.get("recipient_email"):
+                            st.session_state.recipient_email = template[
+                                "recipient_email"
+                            ]
+                            st.success(
+                                f"Contact email extracted: {template['recipient_email']}"
+                            )
+
+                        if template.get("recipient_name") or template.get("name"):
+                            recipient_name = template.get(
+                                "recipient_name"
+                            ) or template.get("name", "")
+                            if recipient_name:
+                                st.session_state.recipient_name = recipient_name
+                                st.success(f"Contact name extracted: {recipient_name}")
+
+                        st.success("Template generated successfully!")
+                        st.experimental_rerun()
+                    else:
+                        st.error(
+                            f"Failed to generate template: {result.get('error', 'Unknown error')}"
+                        )
+
+        with cancel_col:
+            if st.button("Cancel", disabled=not is_request_in_progress()):
+                if cancel_ai_request():
+                    st.warning("Request cancelled")
+                    st.experimental_rerun()
+
+        # Resume Section
+        st.markdown("### Resume Upload")
 
         # Try to load resume data from disk at the start
         if not st.session_state.resume_content:
@@ -321,164 +449,6 @@ def render_email_form():
                     else st.session_state.resume_content
                 )
                 st.text_area("Extracted Text", value=preview, height=150)
-
-        # 2. Job Description section
-        st.header("Job Description")
-        job_description = st.text_area(
-            "Paste job description here",
-            value=st.session_state.get("job_description", ""),
-            height=300,
-            key="job_description",
-        )
-
-        # Extract company name and contact info from job description if available
-        if job_description:
-            # Try to extract company name
-            company_name = extract_company_name(job_description)
-            if company_name and company_name != st.session_state.get(
-                "company_name", ""
-            ):
-                st.session_state["company_name"] = company_name
-                st.success(f"Company name extracted: {company_name}")
-
-            # Try to extract contact info
-            contact_info = extract_contact_info(job_description)
-            if contact_info:
-                if "name" in contact_info and contact_info["name"]:
-                    st.session_state["recipient_name"] = contact_info["name"]
-                    st.info(f"Contact name extracted: {contact_info['name']}")
-
-                if "email" in contact_info and contact_info["email"]:
-                    st.session_state["recipient_email"] = contact_info["email"]
-                    st.info(f"Contact email extracted: {contact_info['email']}")
-
-        # 3. AI Template Generator section (MOVED FROM BELOW)
-        st.header("AI Template Generator")
-
-        # Check API server status
-        server_status = "Not Running"
-        if check_api_server_status():
-            server_status = "Running"
-
-        st.markdown(f"API Server Status: **{server_status}**")
-
-        # Get available models
-        if "ai_models" not in st.session_state:
-            st.session_state.ai_models = get_available_models()
-
-        model_count = len(st.session_state.ai_models)
-        st.markdown(f"Available Models: **{model_count}**")
-
-        # Find default model index
-        default_index = 0
-        if DEFAULT_MODEL in st.session_state.ai_models:
-            default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
-
-        # Model selection
-        selected_model = st.selectbox(
-            "Select AI Model",
-            options=st.session_state.ai_models,
-            index=default_index,
-        )
-
-        # Refresh models button
-        if st.button("Refresh Models List"):
-            st.session_state.ai_models = get_available_models()
-            st.experimental_rerun()
-
-        # Generate template button
-        generate_col, cancel_col = st.columns([3, 1])
-
-        with generate_col:
-            if generate_button := st.button(
-                "Generate Email Template",
-                disabled=is_request_in_progress()
-                or not job_description
-                or not st.session_state.resume_content,
-            ):
-                with st.spinner("Generating template..."):
-                    # Get current template for reference
-                    current_template = st.session_state.current_template
-
-                    # Generate template using cached resume content
-                    result = generate_improved_template(
-                        job_description,
-                        st.session_state.resume_content,
-                        current_template,
-                        model=selected_model,
-                    )
-
-                    # Store result in session state
-                    st.session_state.result = result
-
-                    if result.get("success", False):
-                        template = result["template"]
-
-                        # Update template in session state
-                        st.session_state.current_template = {
-                            "greeting": template.get("greeting", ""),
-                            "body": template.get("body", ""),
-                            "signature": template.get("signature", ""),
-                        }
-
-                        # Update other extracted information if they exist and are not empty
-                        if template.get("position"):
-                            st.session_state.position = template["position"]
-                        if template.get("employer") and template["employer"]:
-                            st.session_state.company_name = template["employer"]
-                        elif template.get("company") and template["company"]:
-                            st.session_state.company_name = template["company"]
-                        if template.get("subject"):
-                            st.session_state.subject = template["subject"]
-                        if template.get("recipient_email"):
-                            st.session_state.recipient_email = template[
-                                "recipient_email"
-                            ]
-
-                        st.success("Template generated successfully!")
-                        st.experimental_rerun()
-                    else:
-                        st.error(
-                            f"Failed to generate template: {result.get('error', 'Unknown error')}"
-                        )
-
-        with cancel_col:
-            if st.button("Cancel", disabled=not is_request_in_progress()):
-                if cancel_ai_request():
-                    st.warning("Request cancelled")
-                    st.experimental_rerun()
-
-        # 4. Email Configuration section
-        st.header("Email Configuration")
-
-        # Recipient information
-        recipient_email = st.text_input(
-            "Recipient Email",
-            value=st.session_state.recipient_email,
-            help="Enter the recruiter's email address",
-        )
-        st.session_state.recipient_email = recipient_email
-
-        recipient_name = st.text_input(
-            "Recipient Name",
-            value=st.session_state.recipient_name,
-            help="Enter the recipient's name (if left empty, will try to extract from email)",
-        )
-        st.session_state.recipient_name = recipient_name
-
-        company_name = st.text_input(
-            "Company Name",
-            value=st.session_state.company_name,
-            help="Enter the company name you're applying to",
-        )
-        st.session_state.company_name = company_name
-
-        position = st.text_input(
-            "Position/Designation",
-            value=st.session_state.position,
-            help="Enter the position you're applying for",
-        )
-        st.session_state.position = position
 
     with col2:
         # Email preview with placeholders filled in

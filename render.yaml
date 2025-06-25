@@ -8,3 +8,7 @@ services:
     envVars:
       - key: PORT
         value: 10000
+      - key: G4F_API_HOST
+        value: 127.0.0.1
+      - key: G4F_API_PORT
+        value: 8080

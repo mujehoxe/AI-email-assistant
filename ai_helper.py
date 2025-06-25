@@ -8,10 +8,11 @@ import os
 import traceback
 import re
 import requests
+import openai
 
 # Get G4F API endpoint from environment variables or use default
 G4F_API_HOST = os.environ.get("G4F_API_HOST", "localhost")
-G4F_API_PORT = os.environ.get("G4F_API_PORT", "1337")
+G4F_API_PORT = int(os.environ.get("G4F_API_PORT", "1337"))
 G4F_API_BASE_URL = f"http://{G4F_API_HOST}:{G4F_API_PORT}/v1"
 
 # Global flag to check if API server is running
@@ -22,61 +23,60 @@ request_in_progress = False
 cancel_request = False
 
 # Default model to use
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 # Fallback models in case we can't fetch from API
 FALLBACK_MODELS = [
     "gpt-4o-mini",  # Keep this first as the default
     "gpt-3.5-turbo",
     "gpt-4",
-    "gpt-4o",
-    "claude-3-opus-20240229",
-    "claude-3-sonnet-20240229",
-    "claude-3-haiku-20240307",
+    "claude-3-opus",
+    "claude-3-sonnet",
     "gemini-pro",
-    "gemini-1.5-pro-latest",
+    "mistral-medium",
 ]
 
 
 def get_available_models():
     """Get list of available models from G4F API"""
+    global FALLBACK_MODELS, G4F_API_HOST, G4F_API_PORT
+
+    # Check if API server is running
+    if not check_api_server_status():
+        st.warning("G4F API server is not running. Using fallback models.")
+        return FALLBACK_MODELS
+
     try:
-        # Try to get models from API
-        response = requests.get(f"{G4F_API_BASE_URL}/models")
+        # Fetch models from G4F API
+        response = requests.get(f"http://{G4F_API_HOST}:{G4F_API_PORT}/v1/models")
+
         if response.status_code == 200:
-            models_data = response.json()
+            data = response.json()
 
-            # Extract model IDs - handle format from your curl output
-            if "data" in models_data and isinstance(models_data["data"], list):
-                available_models = []
-                for model in models_data["data"]:
-                    if "id" in model and model["id"] != "default":
-                        # Skip the default model and add others
-                        available_models.append(model["id"])
+            # Extract model names based on the API response format
+            if "data" in data and isinstance(data["data"], list):
+                # Extract unique model IDs
+                models = []
+                for model in data["data"]:
+                    if isinstance(model, dict) and "id" in model:
+                        model_id = model["id"]
+                        # Filter out 'default' model and avoid duplicates
+                        if model_id != "default" and model_id not in models:
+                            models.append(model_id)
 
-                # If we found models, update the session state and return them
-                if available_models:
-                    # Make sure we don't have duplicates
-                    available_models = list(set(available_models))
-                    # Sort models alphabetically for better UI
-                    available_models.sort()
+                # Return models if found, otherwise fallback
+                if models:
+                    return models
 
-                    # Make sure DEFAULT_MODEL is first in the list
-                    if DEFAULT_MODEL in available_models:
-                        available_models.remove(DEFAULT_MODEL)
-                        available_models.insert(0, DEFAULT_MODEL)
+        # If we reached here, something went wrong with parsing
+        st.warning(
+            "Could not parse models from G4F API response. Using fallback models."
+        )
+        return FALLBACK_MODELS
 
-                    # Update session state if it exists
-                    if "ai_models" in st.session_state:
-                        st.session_state.ai_models = available_models
-                    return available_models
-
-            st.warning("API returned models but in unexpected format")
     except Exception as e:
-        st.warning(f"Could not fetch available models from G4F API: {e}")
-
-    # Return fallback models if API request failed
-    return FALLBACK_MODELS
+        st.warning(f"Could not fetch available models from G4F API: {str(e)}")
+        return FALLBACK_MODELS
 
 
 # Initialize models list - will be updated when API server starts
@@ -92,28 +92,60 @@ def extract_email_from_text(text):
 
 def extract_company_name(job_description):
     """Extract company name from job description"""
-    # Look for common patterns that indicate company name
-    patterns = [
-        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:is\s+looking|is\s+seeking|is\s+hiring|is\s+searching|has\s+an\s+opening|has\s+a\s+job|has\s+a\s+position|has\s+an\s+opportunity)",
-        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:\.|,|\sin\s)",
-        r"([\w\s&\-\.]+?)(?:\sis\s+looking|\sis\s+seeking|\sis\s+hiring|\shas\s+an\s+opening|\shas\s+a\s+job|\shas\s+a\s+position)",
-        r"(?:company|employer):\s*([\w\s&\-\.]+)",
-        r"(?:about\s+us|about\s+the\s+company|company\s+overview|about\s+the\s+team)\s*(?:\n|\r\n?)([\w\s&\-\.]+)",
-        r"(?:about\s+)([\w\s&\-\.]+)(?:\s+[\w\s&\-\.]+\s+is\s+a)",
-    ]
+    try:
+        # Look for common patterns that indicate company name
+        patterns = [
+            r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:is\s+looking|is\s+seeking|is\s+hiring|is\s+searching|has\s+an\s+opening|has\s+a\s+job|has\s+a\s+position|has\s+an\s+opportunity)",
+            r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:\.|,|\sin\s)",
+            r"([\w\s&\-\.]+?)(?:\sis\s+looking|\sis\s+seeking|\sis\s+hiring|\shas\s+an\s+opening|\shas\s+a\s+job|\shas\s+a\s+position)",
+            r"(?:company|employer):\s*([\w\s&\-\.]+)",
+            r"(?:about\s+us|about\s+the\s+company|company\s+overview|about\s+the\s+team)\s*(?:\n|\r\n?)([\w\s&\-\.]+)",
+            r"(?:about\s+)([\w\s&\-\.]+)(?:\s+[\w\s&\-\.]+\s+is\s+a)",
+        ]
 
-    for pattern in patterns:
-        matches = re.search(pattern, job_description, re.IGNORECASE)
-        if matches:
-            # Get the company name from the matched group
-            company_name = matches.group(1).strip()
-            # Clean up company name
-            company_name = re.sub(r"\s+", " ", company_name)
-            if company_name:
-                return company_name
+        # Common job titles to exclude
+        job_titles = [
+            "full stack",
+            "developer",
+            "engineer",
+            "programmer",
+            "manager",
+            "director",
+            "specialist",
+            "analyst",
+            "designer",
+            "architect",
+            "administrator",
+            "lead",
+            "consultant",
+            "coordinator",
+            "assistant",
+            "representative",
+            "officer",
+            "technician",
+        ]
 
-    # If no company name found, return empty string
-    return ""
+        for pattern in patterns:
+            matches = re.search(pattern, job_description, re.IGNORECASE)
+            if matches:
+                # Get the company name from the matched group
+                company_name = matches.group(1).strip()
+                # Clean up company name
+                company_name = re.sub(r"\s+", " ", company_name)
+
+                # Check if it's a job title instead of a company name
+                if company_name and len(company_name) > 2:
+                    # Exclude if it looks like a job title
+                    if not any(
+                        title.lower() in company_name.lower() for title in job_titles
+                    ):
+                        return company_name
+
+        # If no company name found or all potential matches look like job titles
+        return ""
+    except Exception as e:
+        # Return empty string on any error
+        return ""
 
 
 def extract_contact_info(job_description):
@@ -219,31 +251,40 @@ def start_g4f_api_server():
 
 def check_api_server_status():
     """Check if the G4F API server is running"""
+    global G4F_API_HOST, G4F_API_PORT
+
     try:
-        response = requests.get(f"{G4F_API_BASE_URL}/models")
-        if response.status_code == 200:
-            # Also try to update models when checking status
-            try:
-                fresh_models = get_available_models()
-                if fresh_models and len(fresh_models) > 0:
-                    if "ai_models" in st.session_state:
-                        st.session_state.ai_models = fresh_models
-            except:
-                pass
-            return True
+        response = requests.get(f"http://{G4F_API_HOST}:{G4F_API_PORT}/v1/models")
+        return response.status_code == 200
     except:
-        pass
-    return False
+        return False
 
 
 def get_ai_client():
-    """Get OpenAI client configured to use G4F API"""
-    # Initialize the OpenAI client
-    client = OpenAI(
-        api_key="secret",  # Using "secret" as the API key since G4F doesn't require a real one
-        base_url=G4F_API_BASE_URL,  # Point to the G4F API endpoint
-    )
-    return client
+    """Get OpenAI-compatible client configured to use G4F API"""
+    global G4F_API_HOST, G4F_API_PORT
+
+    # Use environment variable or default to localhost:1337
+    base_url = f"http://{G4F_API_HOST}:{G4F_API_PORT}/v1"
+
+    try:
+        # Create an OpenAI client with the G4F API base URL
+        client = openai.OpenAI(
+            api_key="not-needed",  # G4F doesn't require a real API key
+            base_url=base_url,
+        )
+        return client
+    except Exception as e:
+        st.error(f"Error creating OpenAI client: {str(e)}")
+        # Fallback to using g4f directly
+        try:
+            import g4f
+
+            st.info("Using g4f directly as fallback")
+            return g4f
+        except ImportError:
+            st.error("Failed to import g4f. Make sure g4f is installed.")
+            return None
 
 
 def generate_improved_template(
@@ -269,16 +310,16 @@ def generate_improved_template(
 
         # Add company name to log if found
         if contact_info["company"]:
-            st.info(f"Detected company name: {contact_info['company']}")
+            try:
+                st.info(f"Detected company name: {contact_info['company']}")
+            except Exception as e:
+                st.error(f"Error displaying company name: {str(e)}")
+                st.error("Invalid company name format detected")
         else:
             st.info("No company name detected in the job description, which is okay")
 
         # Ensure API server is running
-        if not check_api_server_status():
-            start_g4f_api_server()
-
-        # Get client
-        client = get_ai_client()
+        api_server_running = check_api_server_status()
 
         # Construct the prompt - note the double braces to escape placeholders
         prompt = f"""
@@ -307,98 +348,125 @@ def generate_improved_template(
         3. Keep it concise and enthusiastic
         4. Maintain the greeting/body/signature structure
         5. In the greeting, use either first name (preferred) or last name with appropriate title (Mr./Ms.) - NOT full name
-        6. Keep the placeholder {{name}} in the greeting, but make sure the instructions specify to use first or last name only
-        7. Keep the placeholder {{position}} where appropriate
+        6. Keep the placeholder {{{{name}}}} in the greeting, but make sure the instructions specify to use first or last name only
+        7. Keep the placeholder {{{{position}}}} where appropriate
         8. If a company name was detected, mention it in the body. If no company name was found, that's okay - don't use a placeholder
         
         Important: If you don't have a company name, leave the company field empty. Do NOT use placeholder text like "the company" or "[Company Name]".
         
         Also suggest values for:
         - Position/designation (extracted from job description)
-        - Employer/company name (use extracted company name ONLY if available: {contact_info['company'] or ''}). If no company was found, leave this field empty.
-        - Subject line
-        - Recipient email (use the extracted email if available)
+        - Employer/company name (use extracted company name ONLY if available: {contact_info['company'] or ''})
         
-        Return as JSON with fields: greeting, body, signature, position, employer, subject, recipient_email, company
+        Format your response as a valid JSON object with the following structure:
+        
+        {{
+          "greeting": "Your greeting here",
+          "body": "Your email body here",
+          "signature": "Your signature here",
+          "position": "Extracted position",
+          "employer": "Extracted employer name if found",
+          "subject": "Suggested email subject"
+        }}
         """
 
-        st.info(f"Sending request to AI model: {model}...")
+        # Get client for API request
+        client = get_ai_client()
 
-        # Check if request was cancelled
-        if cancel_request:
-            request_in_progress = False
-            return {"success": False, "error": "Request cancelled by user"}
+        if api_server_running and hasattr(client, "chat"):
+            # Using OpenAI-compatible API
+            st.info(f"Sending request to AI model: {model}...")
 
-        # Call the API
-        response = client.chat.completions.create(
-            model=model,  # Use the selected model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+            )
 
-        # Extract the content
-        result = response.choices[0].message.content
+            # Extract response
+            result = response.choices[0].message.content
+        else:
+            # Using g4f directly as fallback
+            st.warning(
+                "API server not available, using g4f directly (this may take longer)..."
+            )
 
-        # Check if request was cancelled
-        if cancel_request:
-            request_in_progress = False
-            return {"success": False, "error": "Request cancelled by user"}
+            try:
+                import g4f
 
-        st.info("Received response from AI model, processing...")
+                # Map the model name to a g4f provider if possible
+                g4f_model = get_g4f_model_from_name(model)
 
-        # Try to parse as JSON
+                result = g4f.ChatCompletion.create(
+                    model=g4f_model,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.7,
+                )
+            except Exception as g4f_error:
+                st.error(f"Error using g4f directly: {str(g4f_error)}")
+                return {"success": False, "error": str(g4f_error)}
+
+        # Parse the response
         try:
-            # Find JSON in the response (in case there's additional text)
-            json_start = result.find("{")
-            json_end = result.rfind("}") + 1
-            if json_start >= 0 and json_end > json_start:
-                json_str = result[json_start:json_end]
-                template_data = json.loads(json_str)
+            # Try to parse the JSON directly
+            template = json.loads(result)
+
+            # Check if template has all required fields
+            required_fields = ["greeting", "body", "signature"]
+            if all(field in template for field in required_fields):
+                return {"success": True, "template": template}
             else:
-                # Fallback: try to parse the whole response
-                template_data = json.loads(result)
+                missing = [field for field in required_fields if field not in template]
+                return {
+                    "success": False,
+                    "error": f"Response missing required fields: {', '.join(missing)}",
+                    "template": template,
+                }
 
-            # Check if request was cancelled
-            if cancel_request:
-                request_in_progress = False
-                return {"success": False, "error": "Request cancelled by user"}
+        except json.JSONDecodeError:
+            # If direct JSON parsing fails, try to extract JSON from markdown
+            try:
+                # Look for JSON block in markdown
+                json_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
+                match = re.search(json_pattern, result)
 
-            # Set request completed
-            request_in_progress = False
+                if match:
+                    json_str = match.group(1)
+                    template = json.loads(json_str)
 
-            return {
-                "success": True,
-                "template": {
-                    "greeting": template_data.get(
-                        "greeting", current_template.get("greeting", "")
-                    ),
-                    "body": template_data.get("body", current_template.get("body", "")),
-                    "signature": template_data.get(
-                        "signature", current_template.get("signature", "")
-                    ),
-                    "position": template_data.get("position", ""),
-                    "employer": template_data.get("employer", "")
-                    or "",  # Ensure empty if None
-                    "company": template_data.get("company", "")
-                    or "",  # Ensure empty if None
-                    "subject": template_data.get("subject", ""),
-                    "recipient_email": template_data.get(
-                        "recipient_email", contact_info["email"]
-                    ),
-                },
-            }
-        except json.JSONDecodeError as e:
-            st.warning(f"JSON parsing failed: {str(e)}. Trying manual extraction...")
-            st.code(result)
+                    # Check if template has all required fields
+                    required_fields = ["greeting", "body", "signature"]
+                    if all(field in template for field in required_fields):
+                        return {"success": True, "template": template}
+                    else:
+                        missing = [
+                            field for field in required_fields if field not in template
+                        ]
+                        return {
+                            "success": False,
+                            "error": f"Response missing required fields: {', '.join(missing)}",
+                            "template": template,
+                        }
+            except:
+                # If still can't parse JSON, do manual extraction
+                pass
 
             # If JSON parsing fails, extract parts manually
+            st.warning("JSON parsing failed. Trying manual extraction...")
+
             lines = result.split("\n")
             greeting = ""
             body = ""
             signature = ""
             position = ""
-            employer = ""  # Start with empty string rather than using contact_info
-            company = ""  # Start with empty string rather than using contact_info
+            employer = ""
+            company = ""
             subject = ""
             recipient_email = contact_info["email"]
             current_section = None
@@ -424,45 +492,51 @@ def generate_improved_template(
                     subject = line[len("subject:") :].strip()
                 elif line.lower().startswith("recipient_email:"):
                     recipient_email = line[len("recipient_email:") :].strip()
-                elif current_section == "greeting" and not line.lower().startswith(
-                    "body:"
-                ):
+                elif current_section == "greeting":
                     greeting += "\n" + line
-                elif current_section == "body" and not line.lower().startswith(
-                    "signature:"
-                ):
+                elif current_section == "body":
                     body += "\n" + line
                 elif current_section == "signature":
                     signature += "\n" + line
 
-            # Check if request was cancelled
-            if cancel_request:
-                request_in_progress = False
-                return {"success": False, "error": "Request cancelled by user"}
-
-            # Set request completed
-            request_in_progress = False
-
-            return {
-                "success": True,
-                "template": {
-                    "greeting": greeting or current_template.get("greeting", ""),
-                    "body": body or current_template.get("body", ""),
-                    "signature": signature or current_template.get("signature", ""),
-                    "position": position,
-                    "employer": employer,
-                    "company": company,
-                    "subject": subject,
-                    "recipient_email": recipient_email,
-                },
+            template = {
+                "greeting": greeting,
+                "body": body,
+                "signature": signature,
+                "position": position,
+                "employer": employer or company,
+                "subject": subject,
+                "recipient_email": recipient_email,
             }
+
+            return {"success": True, "template": template}
 
     except Exception as e:
         st.error(f"Error in generate_improved_template: {str(e)}")
         st.error(traceback.format_exc())
-        # Set request completed
-        request_in_progress = False
         return {"success": False, "error": str(e)}
+    finally:
+        # Reset request in progress flag
+        request_in_progress = False
+
+
+def get_g4f_model_from_name(model_name):
+    """Map OpenAI model name to g4f provider if possible"""
+    import g4f
+
+    # Map common model names to g4f providers
+    model_map = {
+        "gpt-4o-mini": g4f.models.gpt_4o_mini,
+        "gpt-3.5-turbo": g4f.models.gpt_35_turbo,
+        "gpt-4": g4f.models.gpt_4,
+        "gpt-4-turbo": g4f.models.gpt_4_turbo,
+        "claude-3-opus": g4f.models.claude_3_opus,
+        "claude-3-sonnet": g4f.models.claude_3_sonnet,
+        "gemini-pro": g4f.models.gemini_pro,
+    }
+
+    # Return mapped model or default to gpt-3.5-turbo
+    return model_map.get(model_name, g4f.models.gpt_35_turbo)
 
 
 def cancel_ai_request():

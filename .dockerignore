@@ -9,6 +9,9 @@ __pycache__/
 *.so
 .Python
 env/
+venv/
+ENV/
+.venv/
 build/
 develop-eggs/
 dist/
@@ -24,11 +27,6 @@ var/
 .installed.cfg
 *.egg
 
-# Virtual environments
-venv/
-ENV/
-env/
-
 # IDE files
 .idea/
 .vscode/
@@ -42,4 +40,21 @@ env/
 
 # Generated files
 har_and_cookies/
-generated_media/ 
+generated_media/
+
+# New additions from the code block
+.env
+.streamlit
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+ENV/
+.venv/
+data/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/ 
