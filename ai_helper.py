@@ -23,10 +23,11 @@ request_in_progress = False
 cancel_request = False
 
 # Default model to use
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-4o"
 
 # Fallback models in case we can't fetch from API
 FALLBACK_MODELS = [
+    "gpt-4o",  # Keep this first as the default
     "gpt-4o-mini",  # Keep this first as the default
     "gpt-3.5-turbo",
     "gpt-4",
@@ -92,60 +93,28 @@ def extract_email_from_text(text):
 
 def extract_company_name(job_description):
     """Extract company name from job description"""
-    try:
-        # Look for common patterns that indicate company name
-        patterns = [
-            r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:is\s+looking|is\s+seeking|is\s+hiring|is\s+searching|has\s+an\s+opening|has\s+a\s+job|has\s+a\s+position|has\s+an\s+opportunity)",
-            r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:\.|,|\sin\s)",
-            r"([\w\s&\-\.]+?)(?:\sis\s+looking|\sis\s+seeking|\sis\s+hiring|\shas\s+an\s+opening|\shas\s+a\s+job|\shas\s+a\s+position)",
-            r"(?:company|employer):\s*([\w\s&\-\.]+)",
-            r"(?:about\s+us|about\s+the\s+company|company\s+overview|about\s+the\s+team)\s*(?:\n|\r\n?)([\w\s&\-\.]+)",
-            r"(?:about\s+)([\w\s&\-\.]+)(?:\s+[\w\s&\-\.]+\s+is\s+a)",
-        ]
+    # Look for common patterns that indicate company name
+    patterns = [
+        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:is\s+looking|is\s+seeking|is\s+hiring|is\s+searching|has\s+an\s+opening|has\s+a\s+job|has\s+a\s+position|has\s+an\s+opportunity)",
+        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:\.|,|\sin\s)",
+        r"([\w\s&\-\.]+?)(?:\sis\s+looking|\sis\s+seeking|\sis\s+hiring|\shas\s+an\s+opening|\shas\s+a\s+job|\shas\s+a\s+position)",
+        r"(?:company|employer):\s*([\w\s&\-\.]+)",
+        r"(?:about\s+us|about\s+the\s+company|company\s+overview|about\s+the\s+team)\s*(?:\n|\r\n?)([\w\s&\-\.]+)",
+        r"(?:about\s+)([\w\s&\-\.]+)(?:\s+[\w\s&\-\.]+\s+is\s+a)",
+    ]
 
-        # Common job titles to exclude
-        job_titles = [
-            "full stack",
-            "developer",
-            "engineer",
-            "programmer",
-            "manager",
-            "director",
-            "specialist",
-            "analyst",
-            "designer",
-            "architect",
-            "administrator",
-            "lead",
-            "consultant",
-            "coordinator",
-            "assistant",
-            "representative",
-            "officer",
-            "technician",
-        ]
+    for pattern in patterns:
+        matches = re.search(pattern, job_description, re.IGNORECASE)
+        if matches:
+            # Get the company name from the matched group
+            company_name = matches.group(1).strip()
+            # Clean up company name
+            company_name = re.sub(r"\s+", " ", company_name)
+            if company_name:
+                return company_name
 
-        for pattern in patterns:
-            matches = re.search(pattern, job_description, re.IGNORECASE)
-            if matches:
-                # Get the company name from the matched group
-                company_name = matches.group(1).strip()
-                # Clean up company name
-                company_name = re.sub(r"\s+", " ", company_name)
-
-                # Check if it's a job title instead of a company name
-                if company_name and len(company_name) > 2:
-                    # Exclude if it looks like a job title
-                    if not any(
-                        title.lower() in company_name.lower() for title in job_titles
-                    ):
-                        return company_name
-
-        # If no company name found or all potential matches look like job titles
-        return ""
-    except Exception as e:
-        # Return empty string on any error
-        return ""
+    # If no company name found, return empty string
+    return ""
 
 
 def extract_contact_info(job_description):
@@ -310,11 +279,7 @@ def generate_improved_template(
 
         # Add company name to log if found
         if contact_info["company"]:
-            try:
-                st.info(f"Detected company name: {contact_info['company']}")
-            except Exception as e:
-                st.error(f"Error displaying company name: {str(e)}")
-                st.error("Invalid company name format detected")
+            st.info(f"Detected company name: {contact_info['company']}")
         else:
             st.info("No company name detected in the job description, which is okay")
 
@@ -360,14 +325,14 @@ def generate_improved_template(
         
         Format your response as a valid JSON object with the following structure:
         
-        {{
+        {{{{
           "greeting": "Your greeting here",
           "body": "Your email body here",
           "signature": "Your signature here",
           "position": "Extracted position",
           "employer": "Extracted employer name if found",
           "subject": "Suggested email subject"
-        }}
+        }}}}
         """
 
         # Get client for API request
@@ -526,6 +491,7 @@ def get_g4f_model_from_name(model_name):
 
     # Map common model names to g4f providers
     model_map = {
+        "gpt-4o": g4f.models.gpt_4o,
         "gpt-4o-mini": g4f.models.gpt_4o_mini,
         "gpt-3.5-turbo": g4f.models.gpt_35_turbo,
         "gpt-4": g4f.models.gpt_4,

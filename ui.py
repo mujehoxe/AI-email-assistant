@@ -497,41 +497,59 @@ def render_email_form():
             st.session_state.subject_manually_set = True
         st.session_state.subject = subject
 
-        # Replace placeholders in template
-        greeting = st.session_state.current_template["greeting"]
-        if "{name}" in greeting:
-            # Use first name if available, otherwise use full name or fallback
-            greeting = greeting.replace(
-                "{name}", first_name or recipient_name or "Hiring Manager"
-            )
+        # Option to show dynamic placeholders or filled values
+        placeholder_mode = st.radio(
+            "How to handle dynamic placeholders:",
+            options=["Show filled values", "Show raw placeholders"],
+            index=0,
+            horizontal=True,
+            help="Choose whether to see the template with placeholders like {name} or with filled values",
+        )
+        show_placeholders = placeholder_mode == "Show raw placeholders"
 
-        body = st.session_state.current_template["body"]
-        if "{position}" in body:
-            body = body.replace("{position}", position_name or "position")
-        if "{company}" in body:
-            # Only replace {company} with actual company name if we have one, otherwise leave it blank
-            if company_name:
-                body = body.replace("{company}", company_name)
-            else:
-                body = body.replace("{company}", "")
+        # Get the raw templates without replacements
+        raw_greeting = st.session_state.current_template["greeting"]
+        raw_body = st.session_state.current_template["body"]
+        raw_signature = st.session_state.current_template["signature"]
 
-        signature = st.session_state.current_template["signature"]
+        # Replace placeholders only if not showing raw placeholders
+        if not show_placeholders:
+            greeting = raw_greeting
+            body = raw_body
+            signature = raw_signature
 
-        # Display editable preview
+            if "{name}" in greeting:
+                # Use first name if available, otherwise use full name or fallback
+                greeting = greeting.replace(
+                    "{name}", first_name or recipient_name or "Hiring Manager"
+                )
+
+            if "{position}" in body:
+                body = body.replace("{position}", position_name or "position")
+            if "{company}" in body:
+                # Only replace {company} with actual company name if we have one, otherwise leave it blank
+                if company_name:
+                    body = body.replace("{company}", company_name)
+                else:
+                    body = body.replace("{company}", "")
+        else:
+            greeting = raw_greeting
+            body = raw_body
+            signature = raw_signature
+
+        # Display editable preview with tooltip explaining dynamic fields
         st.markdown("### Greeting")
+        help_text = "Dynamic placeholders: {name} will be replaced with recipient's name when email is sent"
         preview_greeting = st.text_area(
-            "Edit greeting",
-            greeting,
-            height=50,
-            key="preview_greeting",
+            "Edit greeting", greeting, height=50, key="preview_greeting", help=help_text
         )
 
         st.markdown("### Body")
+        help_text = (
+            "Dynamic placeholders: {position} = job title, {company} = company name"
+        )
         preview_body = st.text_area(
-            "Edit body",
-            body,
-            height=200,
-            key="preview_body",
+            "Edit body", body, height=200, key="preview_body", help=help_text
         )
 
         st.markdown("### Signature")
@@ -555,6 +573,30 @@ def render_email_form():
                 elif not st.session_state.get("sender_password"):
                     st.error("Please configure your email password in the sidebar.")
                 else:
+                    # Process any dynamic placeholders in the content before sending
+                    email_greeting = preview_greeting
+                    email_body = preview_body
+                    email_signature = preview_signature
+
+                    # Replace {name} placeholder if present
+                    if "{name}" in email_greeting:
+                        email_greeting = email_greeting.replace(
+                            "{name}", first_name or recipient_name or "Hiring Manager"
+                        )
+
+                    # Replace {position} placeholder if present
+                    if "{position}" in email_body:
+                        email_body = email_body.replace(
+                            "{position}", position_name or "position"
+                        )
+
+                    # Replace {company} placeholder if present
+                    if "{company}" in email_body:
+                        if company_name:
+                            email_body = email_body.replace("{company}", company_name)
+                        else:
+                            email_body = email_body.replace("{company}", "")
+
                     # Get the resume file or create a temp file if we have cached content
                     attachment = None
 
@@ -587,9 +629,9 @@ def render_email_form():
                     success, message = send_email(
                         recipient_email=recipient_email,
                         subject=subject,
-                        greeting=preview_greeting,
-                        body=preview_body,
-                        signature=preview_signature,
+                        greeting=email_greeting,
+                        body=email_body,
+                        signature=email_signature,
                         attachment=attachment,
                         sender_email=st.session_state.get("sender_email"),
                         sender_password=st.session_state.get("sender_password"),
@@ -605,8 +647,42 @@ def render_email_form():
         # Copy to clipboard button
         with col2:
             if st.button("Copy Template to Clipboard"):
+                # Determine whether to use raw template with placeholders or filled version
+                if show_placeholders:
+                    # Use the raw template with placeholders
+                    clipboard_greeting = preview_greeting
+                    clipboard_body = preview_body
+                    clipboard_signature = preview_signature
+                else:
+                    # Process any dynamic placeholders before copying
+                    clipboard_greeting = preview_greeting
+                    clipboard_body = preview_body
+                    clipboard_signature = preview_signature
+
+                    # Replace {name} placeholder if present
+                    if "{name}" in clipboard_greeting:
+                        clipboard_greeting = clipboard_greeting.replace(
+                            "{name}", first_name or recipient_name or "Hiring Manager"
+                        )
+
+                    # Replace {position} placeholder if present
+                    if "{position}" in clipboard_body:
+                        clipboard_body = clipboard_body.replace(
+                            "{position}", position_name or "position"
+                        )
+
+                    # Replace {company} placeholder if present
+                    if "{company}" in clipboard_body:
+                        if company_name:
+                            clipboard_body = clipboard_body.replace(
+                                "{company}", company_name
+                            )
+                        else:
+                            clipboard_body = clipboard_body.replace("{company}", "")
+
+                # Create the full email content
                 full_email = (
-                    f"{preview_greeting}\n\n{preview_body}\n\n{preview_signature}"
+                    f"{clipboard_greeting}\n\n{clipboard_body}\n\n{clipboard_signature}"
                 )
 
                 # Prepare the email content for JavaScript
