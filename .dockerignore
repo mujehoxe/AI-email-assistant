@@ -1,12 +1,45 @@
+# Git
 .git
 .gitignore
-.env
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.streamlit/secrets.toml
-venv/
+*.so
+.Python
 env/
-.vscode/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE files
 .idea/
-*.log 
+.vscode/
+
+# Local data
+*.sqlite
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Generated files
+har_and_cookies/
+generated_media/ 

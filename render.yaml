@@ -1,14 +1,20 @@
 services:
   - type: web
-    name: email-sender
-    env: python
+    name: email-ai-assistant
+    env: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    branch: main
+    numInstances: 1
+    healthCheckPath: /
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.9.0
-      - key: EMAIL_ADDRESS
-        sync: false
-      - key: EMAIL_PASSWORD
-        sync: false
+      - key: PORT
+        value: 8501
+      - key: G4F_API_HOST
+        value: localhost
+      - key: G4F_API_PORT
+        value: 1337
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1

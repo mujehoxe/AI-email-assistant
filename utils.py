@@ -8,111 +8,76 @@ import streamlit as st
 
 
 def extract_name(email):
-    """Extract name from the first part of the email address."""
+    """Extract name from email address"""
     if not email:
         return ""
 
-    # Extract the part before @ and before any dots or numbers
-    match = re.match(r"^([a-zA-Z]+)", email.split("@")[0])
-    if match:
-        name = match.group(1)
-        # Capitalize the first letter
-        return name.capitalize()
-    return ""
+    # Extract the part before @ symbol
+    name_part = email.split("@")[0]
+
+    # Replace dots, underscores, hyphens with spaces
+    name_part = re.sub(r"[._-]", " ", name_part)
+
+    # Capitalize each word
+    name_part = " ".join(word.capitalize() for word in name_part.split())
+
+    return name_part
 
 
-def infer_smtp_settings(email):
-    """Infer SMTP settings from email domain."""
-    if not email or "@" not in email:
-        return None, None
+def send_email(
+    recipient_email,
+    subject,
+    greeting,
+    body,
+    signature,
+    attachment=None,
+    sender_email=None,
+    sender_password=None,
+    smtp_server=None,
+    smtp_port=587,
+):
+    """Send an email with optional attachment"""
+    # Get email credentials from session state or environment variables
+    sender_email = sender_email or os.environ.get("EMAIL_ADDRESS")
+    sender_password = sender_password or os.environ.get("EMAIL_PASSWORD")
+    smtp_server = smtp_server or os.environ.get("SMTP_SERVER")
+    smtp_port = int(smtp_port or os.environ.get("SMTP_PORT", 587))
 
-    # Extract domain from email
-    domain = email.split("@")[1].lower()
+    if not sender_email or not sender_password or not smtp_server:
+        return False, "Email settings not configured. Please check the sidebar."
 
-    # Common email providers SMTP settings
-    smtp_settings = {
-        "gmail.com": ("smtp.gmail.com", 587),
-        "outlook.com": ("smtp-mail.outlook.com", 587),
-        "hotmail.com": ("smtp-mail.outlook.com", 587),
-        "live.com": ("smtp-mail.outlook.com", 587),
-        "yahoo.com": ("smtp.mail.yahoo.com", 587),
-        "yahoo.co.uk": ("smtp.mail.yahoo.com", 587),
-        "yahoo.co.in": ("smtp.mail.yahoo.com", 587),
-        "aol.com": ("smtp.aol.com", 587),
-        "zoho.com": ("smtp.zoho.com", 587),
-        "protonmail.com": ("smtp.protonmail.ch", 587),
-        "icloud.com": ("smtp.mail.me.com", 587),
-        "mail.com": ("smtp.mail.com", 587),
-        "gmx.com": ("smtp.gmx.com", 587),
-        "yandex.com": ("smtp.yandex.com", 587),
-    }
-
-    # Check if domain is in our known list
-    if domain in smtp_settings:
-        return smtp_settings[domain]
-
-    # Try to guess based on common patterns
-    # For example, many companies use smtp.domain.com
     try:
-        # Try to connect to smtp.domain.com
-        test_server = f"mail.{domain}"
-        with smtplib.SMTP(test_server, 587, timeout=2) as server:
-            server.ehlo()
-            return test_server, 587
-    except:
-        pass
-
-    # If we couldn't determine the settings, return None
-    return None, None
-
-
-def send_email(recipient_email, subject, greeting, body, signature, attachment=None):
-    """Send email using SMTP."""
-    try:
-        # Get email credentials from session state or environment variables
-        if "user_email" in st.session_state and st.session_state.user_email:
-            sender_email = st.session_state.user_email
-        else:
-            sender_email = os.getenv("EMAIL_ADDRESS")
-
-        if "user_password" in st.session_state and st.session_state.user_password:
-            password = st.session_state.user_password
-        else:
-            password = os.getenv("EMAIL_PASSWORD")
-
-        # Get SMTP settings
-        smtp_server = st.session_state.smtp_server
-        smtp_port = st.session_state.smtp_port
-
-        # Create a multipart message
+        # Create message
         msg = MIMEMultipart()
         msg["From"] = sender_email
         msg["To"] = recipient_email
         msg["Subject"] = subject
 
-        # Combine greeting, body and signature
-        full_body = f"{greeting}\n\n{body}\n\n{signature}"
-
-        # Add body to email
-        msg.attach(MIMEText(full_body, "plain"))
+        # Combine email parts
+        email_text = f"{greeting}\n\n{body}\n\n{signature}"
+        msg.attach(MIMEText(email_text, "plain"))
 
         # Add attachment if provided
-        if attachment is not None:
-            attachment_name = os.path.basename(attachment.name)
-            part = MIMEApplication(attachment.getbuffer(), Name=attachment_name)
-            part["Content-Disposition"] = f'attachment; filename="{attachment_name}"'
-            msg.attach(part)
+        if attachment:
+            attachment_part = MIMEApplication(
+                attachment.getvalue(), Name=attachment.name
+            )
+            attachment_part["Content-Disposition"] = (
+                f'attachment; filename="{attachment.name}"'
+            )
+            msg.attach(attachment_part)
 
-        # Create SMTP session
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(sender_email, password)
-            server.send_message(msg)
+        # Connect to server and send
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
 
         return True, "Email sent successfully!"
 
     except Exception as e:
-        return False, f"Error: {str(e)}"
+        return False, f"Error sending email: {str(e)}"
 
 
 def get_default_templates():
@@ -125,33 +90,38 @@ I have been leading the development of Real Estate CRM solutions that's being us
 
 I am ready to provide you with any details regarding my career or education, and I will be available to join you after 30 days if you consider my application for the {position} position."""
 
-    # Use user's name from session state if available
-    if "user_name" in st.session_state and st.session_state.user_name:
-        default_signature = f"Best wishes,\n{st.session_state.user_name}"
-    else:
-        default_signature = "Best wishes"
+    default_signature = "Best wishes,\nOussama"
 
     return default_greeting, default_body, default_signature
 
 
-def init_user_settings():
-    """Initialize user settings in session state"""
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = os.getenv("EMAIL_ADDRESS", "")
+def infer_smtp_settings(email_address):
+    """Infer SMTP settings from email address"""
+    if not email_address or "@" not in email_address:
+        return None, None
 
-    if "user_password" not in st.session_state:
-        st.session_state.user_password = os.getenv("EMAIL_PASSWORD", "")
+    domain = email_address.split("@")[-1].lower()
 
-    if "user_name" not in st.session_state:
-        st.session_state.user_name = extract_name(st.session_state.user_email)
+    # Common email providers
+    smtp_settings = {
+        "gmail.com": ("smtp.gmail.com", 587),
+        "outlook.com": ("smtp.office365.com", 587),
+        "hotmail.com": ("smtp.office365.com", 587),
+        "live.com": ("smtp.office365.com", 587),
+        "yahoo.com": ("smtp.mail.yahoo.com", 587),
+        "aol.com": ("smtp.aol.com", 587),
+        "icloud.com": ("smtp.mail.me.com", 587),
+        "me.com": ("smtp.mail.me.com", 587),
+        "protonmail.com": ("smtp.protonmail.ch", 587),
+        "zoho.com": ("smtp.zoho.com", 587),
+        "yandex.com": ("smtp.yandex.com", 587),
+        "mail.com": ("smtp.mail.com", 587),
+        "gmx.com": ("smtp.gmx.com", 587),
+    }
 
-    if "smtp_server" not in st.session_state:
-        st.session_state.smtp_server = infer_smtp_settings(st.session_state.user_email)[
-            0
-        ]
-
-    if "smtp_port" not in st.session_state:
-        st.session_state.smtp_port = infer_smtp_settings(st.session_state.user_email)[1]
-
-    if "settings_saved" not in st.session_state:
-        st.session_state.settings_saved = False
+    # Try to find a match
+    if domain in smtp_settings:
+        return smtp_settings[domain]
+    else:
+        # Try generic approach
+        return f"mail.{domain}", 587

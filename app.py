@@ -1,20 +1,25 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
-from template_manager import init_template_state, render_template_sidebar
+from template_manager import (
+    init_template_state,
+    render_template_sidebar,
+    load_templates,
+    get_template,
+)
 from ui import render_email_form
-from settings import render_settings_sidebar
-from utils import init_user_settings
 import threading
 import time
 
 # Load environment variables
 load_dotenv()
 
-# App title and configuration
+# Set page config
 st.set_page_config(
-    page_title="Email Sender for Recruiters",
+    page_title="AI Email Assistant",
+    page_icon="📧",
     layout="wide",
+    initial_sidebar_state="expanded",
     menu_items={
         "Get Help": "https://github.com/yourusername/email-sender-for-recruiters",
         "Report a bug": "https://github.com/yourusername/email-sender-for-recruiters/issues",
@@ -22,28 +27,50 @@ st.set_page_config(
     },
 )
 
-# Initialize user settings
-init_user_settings()
+# Initialize session state for templates
+if "current_template" not in st.session_state:
+    st.session_state.current_template = {
+        "greeting": "Dear {name},",
+        "body": "I am writing to express my interest in the {position} position at {company}. I believe my experience and skills align well with the requirements of this role.\n\nI would welcome the opportunity to discuss how my background would be a good fit for your team.\n\nThank you for considering my application.",
+        "signature": "Best regards,\n[Your Name]",
+    }
 
-# Main title
-st.title("Email Sender for Recruiters")
-
-# Check if settings have been saved
-if not st.session_state.settings_saved:
-    st.warning(
-        "Please configure your email settings in the sidebar before sending emails."
-    )
+# App title
+st.title("📧 AI Email Assistant")
+st.markdown(
+    "Create professional job application emails with AI assistance. Upload your resume and job description to generate personalized templates."
+)
 
 # Initialize template state
 init_template_state()
 
-# Render sidebar components
+# Render sidebar
 render_template_sidebar()
-render_settings_sidebar()
+
+# Load templates from file
+templates = load_templates()
+
+# Add template selection to sidebar
+st.sidebar.header("Templates")
+template_names = list(templates.keys())
+if template_names:
+    selected_template = st.sidebar.selectbox(
+        "Choose a template",
+        options=template_names,
+        index=0 if template_names else None,
+    )
+
+    if st.sidebar.button("Load Template"):
+        if selected_template:
+            template = get_template(selected_template)
+            if template:
+                st.session_state.current_template = template
+                st.sidebar.success(f"Template '{selected_template}' loaded!")
+                st.experimental_rerun()
 
 # Render main form
 render_email_form()
 
 # Footer
 st.markdown("---")
-st.markdown(f"Created by {st.session_state.user_name}")
+st.markdown("Created by Oussama")

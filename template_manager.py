@@ -3,6 +3,8 @@ import json
 import os
 from utils import get_default_templates
 
+TEMPLATES_FILE = "templates.json"
+
 
 def init_template_state():
     """Initialize template state in session state"""
@@ -38,25 +40,36 @@ def init_template_state():
 
 
 def save_template(name, greeting, body, signature):
-    """Save template to session state"""
-    st.session_state.templates[name] = {
-        "greeting": greeting,
-        "body": body,
-        "signature": signature,
-    }
+    """Save a template to the templates file"""
+    templates = load_templates()
 
-    # Save as last used template
-    st.session_state.last_used_template = {
-        "greeting": greeting,
-        "body": body,
-        "signature": signature,
-    }
+    # Add or update template
+    templates[name] = {"greeting": greeting, "body": body, "signature": signature}
+
+    try:
+        with open(TEMPLATES_FILE, "w") as f:
+            json.dump(templates, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Error saving template: {str(e)}")
+        return False
 
 
 def delete_template(name):
-    """Delete template from session state"""
-    if name in st.session_state.templates:
-        del st.session_state.templates[name]
+    """Delete a template from the templates file"""
+    templates = load_templates()
+
+    if name in templates:
+        del templates[name]
+
+        try:
+            with open(TEMPLATES_FILE, "w") as f:
+                json.dump(templates, f, indent=2)
+            return True
+        except Exception as e:
+            st.error(f"Error deleting template: {str(e)}")
+
+    return False
 
 
 def load_template(name):
@@ -70,6 +83,23 @@ def load_template(name):
 
         return True
     return False
+
+
+def load_templates():
+    """Load templates from JSON file"""
+    if os.path.exists(TEMPLATES_FILE):
+        try:
+            with open(TEMPLATES_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"Error loading templates: {str(e)}")
+    return {}
+
+
+def get_template(name):
+    """Get a specific template by name"""
+    templates = load_templates()
+    return templates.get(name, None)
 
 
 def render_template_sidebar():
