@@ -10,12 +10,18 @@ from ai_helper import (
     get_available_models,
     check_api_server_status,
     extract_contact_info,
+    DEFAULT_MODEL,
+    extract_company_name,
 )
 import io
 import traceback
 import os
 import re
 import json
+import pickle
+import tempfile
+import base64
+from pathlib import Path
 
 # Try importing PDF and docx libraries
 try:
@@ -28,6 +34,29 @@ except ImportError:
         "Resume parsing libraries not available. Install PyPDF2 and python-docx for resume parsing."
     )
     resume_parsing_available = False
+
+# Create data directory if it doesn't exist
+os.makedirs("data", exist_ok=True)
+RESUME_STORAGE_PATH = "data/resume_data.pkl"
+
+
+def save_resume_to_disk(filename, content, file_bytes=None):
+    """Save resume data to disk for persistence"""
+    data = {"filename": filename, "content": content, "file_bytes": file_bytes}
+    with open(RESUME_STORAGE_PATH, "wb") as f:
+        pickle.dump(data, f)
+
+
+def load_resume_from_disk():
+    """Load resume data from disk"""
+    if not os.path.exists(RESUME_STORAGE_PATH):
+        return None
+
+    try:
+        with open(RESUME_STORAGE_PATH, "rb") as f:
+            return pickle.load(f)
+    except:
+        return None
 
 
 def extract_text_from_resume(resume_file):
@@ -181,66 +210,150 @@ def render_email_form():
         is_request_in_progress,
         cancel_ai_request,
         extract_contact_info,
+        DEFAULT_MODEL,
     )
     from template_manager import save_template
     from utils import send_email, infer_smtp_settings
 
-    # Create a two-column layout
+    # Initialize session state variables if they don't exist
+    if "recipient_email" not in st.session_state:
+        st.session_state.recipient_email = ""
+    if "recipient_name" not in st.session_state:
+        st.session_state.recipient_name = ""
+    if "company_name" not in st.session_state:
+        st.session_state.company_name = ""
+    if "position" not in st.session_state:
+        st.session_state.position = ""
+    if "subject" not in st.session_state:
+        st.session_state.subject = "Job Application"
+    if "resume_content" not in st.session_state:
+        st.session_state.resume_content = ""
+    if "resume_filename" not in st.session_state:
+        st.session_state.resume_filename = ""
+
+    # Render email settings in sidebar
+    render_email_settings_sidebar()
+
+    # Create a two-column layout for the main content
     col1, col2 = st.columns([3, 2])
 
     with col1:
-        # Email Form
-        st.header("Email Generator")
+        # REORDERED SECTIONS: Resume and Job Description first
 
-        # File upload and processing
+        # 1. Resume section
+        st.header("Resume Upload")
+
+        # Try to load resume data from disk at the start
+        if not st.session_state.resume_content:
+            resume_data = load_resume_from_disk()
+            if resume_data:
+                st.session_state.resume_filename = resume_data["filename"]
+                st.session_state.resume_content = resume_data["content"]
+                st.session_state.resume_file_bytes = resume_data.get("file_bytes", None)
+
+        # Display currently loaded resume if any
+        if st.session_state.resume_filename:
+            st.info(f"Currently loaded resume: {st.session_state.resume_filename}")
+
+            # Add option to clear the loaded resume
+            if st.button("Clear Resume"):
+                st.session_state.resume_content = ""
+                st.session_state.resume_filename = ""
+                st.session_state.resume_file_bytes = None
+
+                # Remove the disk file too
+                if os.path.exists(RESUME_STORAGE_PATH):
+                    os.remove(RESUME_STORAGE_PATH)
+
+                st.experimental_rerun()
+
+        # File uploader with key to ensure proper state tracking
         resume_file = st.file_uploader(
-            "Upload your resume (PDF or DOCX)", type=["pdf", "docx"]
+            "Upload your resume (PDF or DOCX)",
+            type=["pdf", "docx"],
+            key="resume_uploader",
         )
-        resume_content = ""
 
-        if resume_file:
-            try:
-                if resume_file.name.endswith(".pdf"):
-                    from PyPDF2 import PdfReader
+        # Process the file if a new one was uploaded
+        if resume_file is not None:
+            # Check if this is a new file upload or different from stored file
+            if (
+                not st.session_state.resume_filename
+                or st.session_state.resume_filename != resume_file.name
+            ):
+                try:
+                    if resume_file.name.endswith(".pdf"):
+                        from PyPDF2 import PdfReader
 
-                    pdf = PdfReader(resume_file)
-                    resume_content = ""
-                    for page in pdf.pages:
-                        resume_content += page.extract_text()
-                elif resume_file.name.endswith(".docx"):
-                    from docx import Document
+                        pdf = PdfReader(resume_file)
+                        resume_content = ""
+                        for page in pdf.pages:
+                            resume_content += page.extract_text()
+                    elif resume_file.name.endswith(".docx"):
+                        from docx import Document
 
-                    doc = Document(resume_file)
-                    resume_content = "\n".join([para.text for para in doc.paragraphs])
+                        doc = Document(resume_file)
+                        resume_content = "\n".join(
+                            [para.text for para in doc.paragraphs]
+                        )
 
-                st.success(f"Resume processed: {resume_file.name}")
-            except Exception as e:
-                st.error(f"Error processing resume: {str(e)}")
+                    # Store file content and name in session state
+                    st.session_state.resume_content = resume_content
+                    st.session_state.resume_filename = resume_file.name
 
-        # Job description input
-        st.markdown("### Job Description")
+                    # Store the raw file bytes for sending as attachment
+                    file_bytes = resume_file.getvalue()
+                    st.session_state.resume_file_bytes = file_bytes
+
+                    # Save to disk for persistence
+                    save_resume_to_disk(resume_file.name, resume_content, file_bytes)
+
+                    st.success(f"Resume processed: {resume_file.name}")
+                except Exception as e:
+                    st.error(f"Error processing resume: {str(e)}")
+
+        # Show resume preview if we have content (from any source)
+        if st.session_state.resume_content and resume_parsing_available:
+            with st.expander("Resume Preview"):
+                preview = (
+                    st.session_state.resume_content[:1000] + "..."
+                    if len(st.session_state.resume_content) > 1000
+                    else st.session_state.resume_content
+                )
+                st.text_area("Extracted Text", value=preview, height=150)
+
+        # 2. Job Description section
+        st.header("Job Description")
         job_description = st.text_area(
-            "Paste the job description here",
-            height=200,
+            "Paste job description here",
+            value=st.session_state.get("job_description", ""),
+            height=300,
             key="job_description",
-            help="Copy and paste the entire job posting here",
         )
 
-        # Extract contact info from job description
-        contact_info = {}
+        # Extract company name and contact info from job description if available
         if job_description:
+            # Try to extract company name
+            company_name = extract_company_name(job_description)
+            if company_name and company_name != st.session_state.get(
+                "company_name", ""
+            ):
+                st.session_state["company_name"] = company_name
+                st.success(f"Company name extracted: {company_name}")
+
+            # Try to extract contact info
             contact_info = extract_contact_info(job_description)
+            if contact_info:
+                if "name" in contact_info and contact_info["name"]:
+                    st.session_state["recipient_name"] = contact_info["name"]
+                    st.info(f"Contact name extracted: {contact_info['name']}")
 
-            # Update session state with extracted info
-            if contact_info.get("name"):
-                st.session_state.recipient_name = contact_info["name"]
-            if contact_info.get("email"):
-                st.session_state.recipient_email = contact_info["email"]
-            if contact_info.get("company"):
-                st.session_state.company_name = contact_info["company"]
+                if "email" in contact_info and contact_info["email"]:
+                    st.session_state["recipient_email"] = contact_info["email"]
+                    st.info(f"Contact email extracted: {contact_info['email']}")
 
-        # Template generator
-        st.markdown("### AI Template Generator")
+        # 3. Template generator section - MOVED UP
+        st.header("AI Template Generator")
 
         # Check API server status
         server_status = "Not Running"
@@ -256,11 +369,16 @@ def render_email_form():
         model_count = len(st.session_state.ai_models)
         st.markdown(f"Available Models: **{model_count}**")
 
+        # Find default model index
+        default_index = 0
+        if DEFAULT_MODEL in st.session_state.ai_models:
+            default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
+
         # Model selection
         selected_model = st.selectbox(
             "Select AI Model",
             options=st.session_state.ai_models,
-            index=0 if st.session_state.ai_models else None,
+            index=default_index,
         )
 
         # Refresh models button
@@ -276,16 +394,16 @@ def render_email_form():
                 "Generate Email Template",
                 disabled=is_request_in_progress()
                 or not job_description
-                or not resume_content,
+                or not st.session_state.resume_content,
             ):
                 with st.spinner("Generating template..."):
                     # Get current template for reference
                     current_template = st.session_state.current_template
 
-                    # Generate template
+                    # Generate template using cached resume content
                     result = generate_improved_template(
                         job_description,
-                        resume_content,
+                        st.session_state.resume_content,
                         current_template,
                         model=selected_model,
                     )
@@ -303,11 +421,13 @@ def render_email_form():
                             "signature": template.get("signature", ""),
                         }
 
-                        # Update other extracted information
+                        # Update other extracted information if they exist and are not empty
                         if template.get("position"):
                             st.session_state.position = template["position"]
-                        if template.get("employer"):
+                        if template.get("employer") and template["employer"]:
                             st.session_state.company_name = template["employer"]
+                        elif template.get("company") and template["company"]:
+                            st.session_state.company_name = template["company"]
                         if template.get("subject"):
                             st.session_state.subject = template["subject"]
                         if template.get("recipient_email"):
@@ -328,31 +448,102 @@ def render_email_form():
                     st.warning("Request cancelled")
                     st.experimental_rerun()
 
+        # 4. Email Configuration section
+        st.header("Email Configuration")
+
+        # Recipient information
+        recipient_email = st.text_input(
+            "Recipient Email",
+            value=st.session_state.recipient_email,
+            help="Enter the recruiter's email address",
+        )
+        st.session_state.recipient_email = recipient_email
+
+        recipient_name = st.text_input(
+            "Recipient Name",
+            value=st.session_state.recipient_name,
+            help="Enter the recipient's name (if left empty, will try to extract from email)",
+        )
+        st.session_state.recipient_name = recipient_name
+
+        company_name = st.text_input(
+            "Company Name",
+            value=st.session_state.company_name,
+            help="Enter the company name you're applying to",
+        )
+        st.session_state.company_name = company_name
+
+        position = st.text_input(
+            "Position/Designation",
+            value=st.session_state.position,
+            help="Enter the position you're applying for",
+        )
+        st.session_state.position = position
+
     with col2:
         # Email preview with placeholders filled in
         st.header("Email Preview")
 
         # Get values for placeholders
-        recipient_name = st.session_state.get("recipient_name", "")
-        company_name = st.session_state.get("company_name", "")
-        position_name = st.session_state.get("position", "")
+        recipient_name = st.session_state.recipient_name
+        company_name = st.session_state.company_name
+        position_name = st.session_state.position
 
         # If we don't have recipient name but have email, extract from email
-        if not recipient_name and st.session_state.get("recipient_email"):
+        if not recipient_name and st.session_state.recipient_email:
             from utils import extract_name
 
-            recipient_name = extract_name(st.session_state.get("recipient_email"))
+            recipient_name = extract_name(st.session_state.recipient_email)
+
+        # Extract first name for more personalized greeting
+        first_name = ""
+        if recipient_name:
+            name_parts = recipient_name.split()
+            if name_parts:
+                first_name = name_parts[0]  # Get first name
+
+        # Update subject with position if available
+        if (
+            position_name
+            and company_name
+            and not st.session_state.get("subject_manually_set", False)
+        ):
+            subject_value = (
+                f"Application for the {position_name} position at {company_name}"
+            )
+        elif position_name and not st.session_state.get("subject_manually_set", False):
+            subject_value = f"Application for the {position_name} position"
+        else:
+            subject_value = st.session_state.subject
+
+        # MOVED: Subject field to top of preview section
+        st.markdown("### Subject")
+        subject = st.text_input(
+            "Email Subject", value=subject_value, key="email_subject"
+        )
+
+        # Track if subject was manually set
+        if subject != subject_value:
+            st.session_state.subject_manually_set = True
+        st.session_state.subject = subject
 
         # Replace placeholders in template
         greeting = st.session_state.current_template["greeting"]
         if "{name}" in greeting:
-            greeting = greeting.replace("{name}", recipient_name or "Hiring Manager")
+            # Use first name if available, otherwise use full name or fallback
+            greeting = greeting.replace(
+                "{name}", first_name or recipient_name or "Hiring Manager"
+            )
 
         body = st.session_state.current_template["body"]
         if "{position}" in body:
             body = body.replace("{position}", position_name or "position")
         if "{company}" in body:
-            body = body.replace("{company}", company_name or "the company")
+            # Only replace {company} with actual company name if we have one, otherwise leave it blank
+            if company_name:
+                body = body.replace("{company}", company_name)
+            else:
+                body = body.replace("{company}", "")
 
         signature = st.session_state.current_template["signature"]
 
@@ -381,24 +572,92 @@ def render_email_form():
             key="preview_signature",
         )
 
+        # Add action buttons
+        col1, col2 = st.columns(2)
+
+        # Add Send Email button
+        with col1:
+            if st.button("Send Email", type="primary"):
+                if not recipient_email:
+                    st.error("Please enter a recipient email address.")
+                elif not st.session_state.get("sender_email"):
+                    st.error("Please configure your email address in the sidebar.")
+                elif not st.session_state.get("sender_password"):
+                    st.error("Please configure your email password in the sidebar.")
+                else:
+                    # Get the resume file or create a temp file if we have cached content
+                    attachment = None
+
+                    # If we have a fresh file upload, use that
+                    if resume_file:
+                        attachment = resume_file
+
+                    # Otherwise, if we have saved file bytes, create a BytesIO object
+                    elif (
+                        st.session_state.get("resume_file_bytes")
+                        and st.session_state.resume_filename
+                    ):
+                        from io import BytesIO
+
+                        attachment = BytesIO(st.session_state.resume_file_bytes)
+                        attachment.name = st.session_state.resume_filename
+
+                    # As a last resort, if we only have the extracted text but no binary data
+                    elif (
+                        st.session_state.resume_content
+                        and st.session_state.resume_filename
+                    ):
+                        from io import BytesIO
+
+                        attachment = BytesIO(
+                            st.session_state.resume_content.encode("utf-8")
+                        )
+                        attachment.name = st.session_state.resume_filename
+
+                    success, message = send_email(
+                        recipient_email=recipient_email,
+                        subject=subject,
+                        greeting=preview_greeting,
+                        body=preview_body,
+                        signature=preview_signature,
+                        attachment=attachment,
+                        sender_email=st.session_state.get("sender_email"),
+                        sender_password=st.session_state.get("sender_password"),
+                        smtp_server=st.session_state.get("smtp_server"),
+                        smtp_port=st.session_state.get("smtp_port", 587),
+                    )
+
+                    if success:
+                        st.success(message)
+                    else:
+                        st.error(message)
+
         # Copy to clipboard button
-        if st.button("Copy Template to Clipboard"):
-            full_email = f"{preview_greeting}\n\n{preview_body}\n\n{preview_signature}"
-            # Use JavaScript to copy to clipboard
-            js_code = f"""
-            <script>
-                const text = `{full_email.replace('"', '\\"').replace('\n', '\\n')}`;
-                const el = document.createElement('textarea');
-                el.value = text;
-                document.body.appendChild(el);
-                el.select();
-                document.execCommand('copy');
-                document.body.removeChild(el);
-                alert('Email template copied to clipboard!');
-            </script>
-            """
-            st.components.v1.html(js_code, height=0)
-            st.success("Email template copied to clipboard!")
+        with col2:
+            if st.button("Copy Template to Clipboard"):
+                full_email = (
+                    f"{preview_greeting}\n\n{preview_body}\n\n{preview_signature}"
+                )
+
+                # Prepare the email content for JavaScript
+                # Use json.dumps to properly escape all special characters
+                escaped_email = json.dumps(full_email)
+
+                # Use JavaScript to copy to clipboard
+                js_code = f"""
+                <script>
+                    const text = {escaped_email};
+                    const el = document.createElement('textarea');
+                    el.value = text;
+                    document.body.appendChild(el);
+                    el.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(el);
+                    alert('Email template copied to clipboard!');
+                </script>
+                """
+                st.components.v1.html(js_code, height=0)
+                st.success("Email template copied to clipboard!")
 
         # Template save form
         st.markdown("### Save Template")

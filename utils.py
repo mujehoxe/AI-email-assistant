@@ -8,7 +8,7 @@ import streamlit as st
 
 
 def extract_name(email):
-    """Extract name from email address"""
+    """Extract name from email address and return the first name"""
     if not email:
         return ""
 
@@ -21,7 +21,12 @@ def extract_name(email):
     # Capitalize each word
     name_part = " ".join(word.capitalize() for word in name_part.split())
 
-    return name_part
+    # Get first name if possible
+    name_parts = name_part.split()
+    if name_parts:
+        return name_parts[0]  # Return first name only
+
+    return name_part  # Return full cleaned name if splitting doesn't work
 
 
 def send_email(

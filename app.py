@@ -27,13 +27,31 @@ st.set_page_config(
     },
 )
 
-# Initialize session state for templates
+# Initialize session state
 if "current_template" not in st.session_state:
     st.session_state.current_template = {
         "greeting": "Dear {name},",
         "body": "I am writing to express my interest in the {position} position at {company}. I believe my experience and skills align well with the requirements of this role.\n\nI would welcome the opportunity to discuss how my background would be a good fit for your team.\n\nThank you for considering my application.",
         "signature": "Best regards,\n[Your Name]",
     }
+
+# Initialize resume storage in session state
+if "resume_content" not in st.session_state:
+    st.session_state.resume_content = ""
+if "resume_filename" not in st.session_state:
+    st.session_state.resume_filename = ""
+
+# Initialize other session state variables
+if "recipient_email" not in st.session_state:
+    st.session_state.recipient_email = ""
+if "recipient_name" not in st.session_state:
+    st.session_state.recipient_name = ""
+if "company_name" not in st.session_state:
+    st.session_state.company_name = ""
+if "position" not in st.session_state:
+    st.session_state.position = ""
+if "subject" not in st.session_state:
+    st.session_state.subject = "Job Application"
 
 # App title
 st.title("📧 AI Email Assistant")

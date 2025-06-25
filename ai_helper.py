@@ -21,9 +21,12 @@ request_in_progress = False
 # Global flag to cancel a request
 cancel_request = False
 
+# Default model to use
+DEFAULT_MODEL = "gpt-4o"
+
 # Fallback models in case we can't fetch from API
 FALLBACK_MODELS = [
-    "gpt-4o-mini",
+    "gpt-4o-mini",  # Keep this first as the default
     "gpt-3.5-turbo",
     "gpt-4",
     "gpt-4o",
@@ -39,12 +42,9 @@ def get_available_models():
     """Get list of available models from G4F API"""
     try:
         # Try to get models from API
-        response = requests.get(f"{G4F_API_BASE_URL}/models")
+        response = requests.get(f"{G4F_API_BASE_URL}/models", timeout=5)
         if response.status_code == 200:
             models_data = response.json()
-
-            # Debug - log the response
-            # st.write("API Response:", models_data)
 
             # Extract model IDs - handle format from your curl output
             if "data" in models_data and isinstance(models_data["data"], list):
@@ -60,16 +60,28 @@ def get_available_models():
                     available_models = list(set(available_models))
                     # Sort models alphabetically for better UI
                     available_models.sort()
+
+                    # Make sure DEFAULT_MODEL is first in the list
+                    if DEFAULT_MODEL in available_models:
+                        available_models.remove(DEFAULT_MODEL)
+                        available_models.insert(0, DEFAULT_MODEL)
+
                     # Update session state if it exists
                     if "ai_models" in st.session_state:
                         st.session_state.ai_models = available_models
                     return available_models
 
             st.warning("API returned models but in unexpected format")
+    except requests.exceptions.ConnectionError:
+        st.warning(
+            f"Could not connect to G4F API at {G4F_API_BASE_URL}. Please make sure the Docker container is running on port {G4F_API_PORT}."
+        )
+    except requests.exceptions.Timeout:
+        st.warning(
+            f"Connection to G4F API timed out. API server might be starting up or overloaded."
+        )
     except Exception as e:
         st.warning(f"Could not fetch available models from G4F API: {e}")
-        # More detailed error for debugging
-        # st.warning(f"Details: {traceback.format_exc()}")
 
     # Return fallback models if API request failed
     return FALLBACK_MODELS
@@ -88,28 +100,28 @@ def extract_email_from_text(text):
 
 def extract_company_name(job_description):
     """Extract company name from job description"""
-    company_name = ""
-
-    # Common patterns for company names in job descriptions
+    # Look for common patterns that indicate company name
     patterns = [
-        r"(?:at|with|for|join)\s+([A-Z][A-Za-z0-9\s&\.,]+?)(?:\s+is|\s+as|\s+in|\s*,|\s*\.|\s+we|\s+our|\s+seeking|\s+hiring|\s+looking)",
-        r"About\s+([A-Z][A-Za-z0-9\s&\.,]+?)(?:\s+is|\s+as|\s+in|\s*,|\s*\.|\s+we|\s+our)",
-        r"([A-Z][A-Za-z0-9\s&\.,]+?)\s+is\s+(?:seeking|looking|hiring|searching|recruiting)",
-        r"Welcome\s+to\s+([A-Z][A-Za-z0-9\s&\.,]+)",
-        r"About\s+the\s+Company[:\s]+([A-Z][A-Za-z0-9\s&\.,]+)",
-        r"Company:\s+([A-Z][A-Za-z0-9\s&\.,]+)",
+        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:is\s+looking|is\s+seeking|is\s+hiring|is\s+searching|has\s+an\s+opening|has\s+a\s+job|has\s+a\s+position|has\s+an\s+opportunity)",
+        r"(?:at|with|for|join)\s+([\w\s&\-\.]+?)(?:\.|,|\sin\s)",
+        r"([\w\s&\-\.]+?)(?:\sis\s+looking|\sis\s+seeking|\sis\s+hiring|\shas\s+an\s+opening|\shas\s+a\s+job|\shas\s+a\s+position)",
+        r"(?:company|employer):\s*([\w\s&\-\.]+)",
+        r"(?:about\s+us|about\s+the\s+company|company\s+overview|about\s+the\s+team)\s*(?:\n|\r\n?)([\w\s&\-\.]+)",
+        r"(?:about\s+)([\w\s&\-\.]+)(?:\s+[\w\s&\-\.]+\s+is\s+a)",
     ]
 
-    # Try each pattern
     for pattern in patterns:
-        matches = re.search(pattern, job_description)
+        matches = re.search(pattern, job_description, re.IGNORECASE)
         if matches:
+            # Get the company name from the matched group
             company_name = matches.group(1).strip()
-            # Clean up any trailing punctuation
-            company_name = re.sub(r"[,\.\s]+$", "", company_name)
-            break
+            # Clean up company name
+            company_name = re.sub(r"\s+", " ", company_name)
+            if company_name:
+                return company_name
 
-    return company_name
+    # If no company name found, return empty string
+    return ""
 
 
 def extract_contact_info(job_description):
@@ -124,36 +136,41 @@ def extract_contact_info(job_description):
     name = ""
 
     # Look for common patterns like "Contact: John Doe (john.doe@example.com)"
-    name_patterns = [
-        (
-            r"(?:contact|send|email|apply|resume to|cv to|application to)[:\s]+([\w\s]+)[\s\(<]+"
-            + re.escape(email)
-            if email
-            else ""
-        ),
-        r"([\w\s]+)[\s\(<]+" + re.escape(email) if email else "",
-        r"(?:contact|send|email|apply|resume to|cv to|application to)[:\s]+([\w\s]+)",
-        r"(?:recruiter|hiring manager|hr manager|contact person)[:\s]+([\w\s]+)",
-    ]
+    name_patterns = []
+
+    # Only add email-based patterns if we have an email
+    if email:
+        name_patterns.extend(
+            [
+                r"(?:contact|send|email|apply|resume to|cv to|application to)[:\s]+([\w\s]+)[\s\(<]+"
+                + re.escape(email),
+                r"([\w\s]+)[\s\(<]+" + re.escape(email),
+            ]
+        )
+
+    # Add general name patterns
+    name_patterns.extend(
+        [
+            r"(?:contact|send|email|apply|resume to|cv to|application to)[:\s]+([\w\s]+)",
+            r"(?:recruiter|hiring manager|hr manager|contact person)[:\s]+([\w\s]+)",
+        ]
+    )
 
     # Try to find name in job description
-    if email:
-        for pattern in name_patterns:
-            if pattern:  # Skip empty patterns
-                matches = re.search(pattern, job_description, re.IGNORECASE)
-                if matches:
-                    name = matches.group(1).strip()
-                    break
+    for pattern in name_patterns:
+        matches = re.search(pattern, job_description, re.IGNORECASE)
+        if matches:
+            name = matches.group(1).strip()
+            break
 
     # If name not found in job description but we have email, extract from email
     if not name and email:
         # Extract name from email address
+        from utils import extract_name
+
         name = extract_name(email)
 
-    # Ensure company name is not empty
-    if not company_name:
-        company_name = "the company"
-
+    # Return extracted information - no default values
     return {"email": email, "name": name, "company": company_name}
 
 
@@ -211,7 +228,7 @@ def start_g4f_api_server():
 def check_api_server_status():
     """Check if the G4F API server is running"""
     try:
-        response = requests.get(f"{G4F_API_BASE_URL}/models")
+        response = requests.get(f"{G4F_API_BASE_URL}/models", timeout=3)
         if response.status_code == 200:
             # Also try to update models when checking status
             try:
@@ -222,9 +239,20 @@ def check_api_server_status():
             except:
                 pass
             return True
-    except:
-        pass
-    return False
+        else:
+            st.warning(f"API server returned status code: {response.status_code}")
+            return False
+    except requests.exceptions.ConnectionError:
+        st.warning(
+            f"Could not connect to G4F API at {G4F_API_BASE_URL}. Make sure the Docker container is running."
+        )
+        return False
+    except requests.exceptions.Timeout:
+        st.warning("Connection to G4F API timed out. Server might be starting up.")
+        return False
+    except Exception as e:
+        st.warning(f"Error checking API server status: {str(e)}")
+        return False
 
 
 def get_ai_client():
@@ -251,9 +279,18 @@ def generate_improved_template(
         # Extract contact info from job description
         contact_info = extract_contact_info(job_description)
 
-        # Add company name to log
+        # Extract first name if full name is available
+        first_name = ""
+        if contact_info["name"]:
+            name_parts = contact_info["name"].split()
+            if name_parts:
+                first_name = name_parts[0]
+
+        # Add company name to log if found
         if contact_info["company"]:
             st.info(f"Detected company name: {contact_info['company']}")
+        else:
+            st.info("No company name detected in the job description, which is okay")
 
         # Ensure API server is running
         if not check_api_server_status():
@@ -280,19 +317,24 @@ def generate_improved_template(
         ## Contact Information (extracted from job description):
         Email: {contact_info['email']}
         Name: {contact_info['name']}
-        Company: {contact_info['company']}
+        First Name: {first_name}
+        Company: {contact_info['company'] or 'Not found (which is okay)'}
         
         Please create:
         1. A brief, conversational email that sounds like a real person wrote it
         2. Highlight 2-3 most relevant skills/experiences matching the job requirements
         3. Keep it concise and enthusiastic
         4. Maintain the greeting/body/signature structure
-        5. Keep the placeholders {{name}} and {{position}} where appropriate
-        6. Mention the company name ({contact_info['company']}) in the body if available
+        5. In the greeting, use either first name (preferred) or last name with appropriate title (Mr./Ms.) - NOT full name
+        6. Keep the placeholder {{name}} in the greeting, but make sure the instructions specify to use first or last name only
+        7. Keep the placeholder {{position}} where appropriate
+        8. If a company name was detected, mention it in the body. If no company name was found, that's okay - don't use a placeholder
+        
+        Important: If you don't have a company name, leave the company field empty. Do NOT use placeholder text like "the company" or "[Company Name]".
         
         Also suggest values for:
         - Position/designation (extracted from job description)
-        - Employer/company name (use extracted company name if available: {contact_info['company']})
+        - Employer/company name (use extracted company name ONLY if available: {contact_info['company'] or ''}). If no company was found, leave this field empty.
         - Subject line
         - Recipient email (use the extracted email if available)
         
@@ -354,8 +396,10 @@ def generate_improved_template(
                         "signature", current_template.get("signature", "")
                     ),
                     "position": template_data.get("position", ""),
-                    "employer": template_data.get("employer", contact_info["company"]),
-                    "company": template_data.get("company", contact_info["company"]),
+                    "employer": template_data.get("employer", "")
+                    or "",  # Ensure empty if None
+                    "company": template_data.get("company", "")
+                    or "",  # Ensure empty if None
                     "subject": template_data.get("subject", ""),
                     "recipient_email": template_data.get(
                         "recipient_email", contact_info["email"]
@@ -372,8 +416,8 @@ def generate_improved_template(
             body = ""
             signature = ""
             position = ""
-            employer = contact_info["company"] or ""
-            company = contact_info["company"] or ""
+            employer = ""  # Start with empty string rather than using contact_info
+            company = ""  # Start with empty string rather than using contact_info
             subject = ""
             recipient_email = contact_info["email"]
             current_section = None

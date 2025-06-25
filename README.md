@@ -45,7 +45,7 @@ Alternatively, you can use the prebuilt G4F image:
 
 ```bash
 docker run \
-  -p 1337:8080 \
+  -p 1337:8080 -p 8080:8080 \
   -v ${PWD}/har_and_cookies:/app/har_and_cookies \
   -v ${PWD}/generated_media:/app/generated_media \
   hlohaus789/g4f:latest-slim
@@ -56,6 +56,23 @@ And then run the Streamlit app separately:
 ```bash
 streamlit run app.py
 ```
+
+### Troubleshooting Docker
+
+If the G4F API server is not working properly, try these steps:
+
+1. Ensure ports 1337 and 8080 are available and not being used by other services
+2. Make sure Docker has permission to create and access the mounted volumes
+3. Check Docker logs for any error messages:
+   ```bash
+   docker ps -a  # Get container ID
+   docker logs <container_id>
+   ```
+4. If issues persist, try restarting the Docker daemon:
+   ```bash
+   sudo systemctl restart docker
+   ```
+5. Verify the API server is running by accessing: http://localhost:1337/models
 
 ## Deployment on Render
 
