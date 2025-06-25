@@ -69,7 +69,11 @@ def extract_company_name(job_description: str) -> str:
 
 
 def extract_contact_info(job_description: str) -> ContactInfo:
-    """Extract contact information from job description"""
+    """Extract contact information from job description
+
+    This function only extracts information from the job description, not the resume.
+    It returns a dictionary with email, name, and company extracted from the job description.
+    """
     email = extract_email_from_text(job_description)
     company_name = extract_company_name(job_description)
     name = ""
@@ -105,6 +109,31 @@ def extract_contact_info(job_description: str) -> ContactInfo:
         from utils import extract_name
 
         name = extract_name(email)
+
+    # Filter out generic or invalid names
+    generic_names = [
+        "at",
+        "hr",
+        "info",
+        "jobs",
+        "careers",
+        "admin",
+        "recruitment",
+        "recruiting",
+        "contact",
+        "apply",
+        "job",
+        "resume",
+        "application",
+        "hiring",
+        "talent",
+        "human resources",
+        "humanresources",
+    ]
+
+    # Check if the extracted name is generic
+    if name.lower() in generic_names or len(name) <= 2:
+        name = ""  # Clear the name if it's generic
 
     return {"email": email, "name": name, "company": company_name}
 
@@ -280,12 +309,19 @@ def create_prompt(
     2. Highlight 2-3 most relevant skills/experiences matching the job requirements
     3. Keep it concise and enthusiastic
     4. Maintain the greeting/body/signature structure
-    5. In the greeting, use either first name (preferred) or last name with appropriate title (Mr./Ms.) - NOT full name
+    5. In the greeting:
+       - If a valid recipient name is found, use their first name (preferred) or last name with appropriate title (Mr./Ms.)
+       - If no valid name is found (or name is generic like "at", "hr", etc.), use "Hiring Manager" in the greeting
+       - DO NOT use a full name in the greeting
     6. Keep the placeholder {{{{name}}}} in the greeting, but make sure the instructions specify to use first or last name only
     7. Keep the placeholder {{{{position}}}} where appropriate
     8. If a company name was detected, mention it in the body. If no company name was found, that's okay - don't use a placeholder
     
-    Important: If you don't have a company name, leave the company field empty. Do NOT use placeholder text like "the company" or "[Company Name]".
+    Important: 
+    - Only extract information from the job description, not the resume
+    - Use the resume only to match skills and experience to the job requirements
+    - If you don't have a company name, leave the company field empty. DO NOT use placeholder text like "the company" or "[Company Name]"
+    - If the recipient name is missing, invalid, or generic (like "at", "hr", "info", "jobs", "careers", "admin", etc.), leave the recipient_name field empty in your response and use "Hiring Manager" in the greeting
     
     Format your response as a valid JSON object with the following structure:
     
@@ -293,11 +329,11 @@ def create_prompt(
       "greeting": "Your greeting here",
       "body": "Your email body here",
       "signature": "Your signature here",
-      "position": "Extracted position",
-      "employer": "Extracted employer name if found",
+      "position": "Extracted position from job description",
+      "employer": "Extracted employer name from job description if found",
       "subject": "Suggested email subject",
-      "recipient_name": "Extracted recipient name if found",
-      "recipient_email": "Extracted email if found"
+      "recipient_name": "Extracted recipient name from job description if found (leave empty if invalid or generic)",
+      "recipient_email": "Extracted email from job description if found"
     }}
     """
 
@@ -305,7 +341,10 @@ def create_prompt(
 def parse_ai_response(
     result: str, contact_info: ContactInfo
 ) -> Tuple[bool, Dict[str, Any]]:
-    """Parse the AI response and extract template data"""
+    """Parse the AI response and extract template data
+
+    Uses contact_info from the job description as fallback if the AI doesn't provide values.
+    """
     # Try to parse the JSON directly
     try:
         template = json.loads(result)

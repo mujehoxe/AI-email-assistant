@@ -84,7 +84,7 @@ if template_names:
             if template:
                 st.session_state.current_template = template
                 st.sidebar.success(f"Template '{selected_template}' loaded!")
-                st.experimental_rerun()
+                st.rerun()
 
 # Render main form
 render_email_form()

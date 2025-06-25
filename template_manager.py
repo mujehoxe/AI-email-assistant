@@ -117,12 +117,12 @@ def render_template_sidebar():
             if st.sidebar.button("Load Selected Template"):
                 if load_template(selected_template):
                     st.sidebar.success(f"Template '{selected_template}' loaded!")
-                    st.experimental_rerun()
+                    st.rerun()
 
             # Delete button
             if st.sidebar.button("Delete Selected Template"):
                 delete_template(selected_template)
                 st.sidebar.warning(f"Template '{selected_template}' deleted!")
-                st.experimental_rerun()
+                st.rerun()
     else:
         st.sidebar.info("No saved templates yet")

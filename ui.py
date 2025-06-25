@@ -184,7 +184,7 @@ def render_email_settings_sidebar():
                 if models and models != AVAILABLE_MODELS:
                     st.session_state.ai_models = models
                     st.sidebar.success(f"Found {len(models)} models")
-                    st.experimental_rerun()
+                    st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Error fetching models: {str(e)}")
         except Exception as e:
@@ -196,7 +196,7 @@ def render_email_settings_sidebar():
             models = get_available_models()
             st.session_state.ai_models = models
             st.sidebar.success(f"Found {len(models)} models")
-            st.experimental_rerun()
+            st.rerun()
         except Exception as e:
             st.sidebar.error(f"Error refreshing models: {str(e)}")
 
@@ -265,7 +265,7 @@ def render_email_form():
                 if os.path.exists(RESUME_STORAGE_PATH):
                     os.remove(RESUME_STORAGE_PATH)
 
-                st.experimental_rerun()
+                st.rerun()
 
         # File uploader with key to ensure proper state tracking
         resume_file = st.file_uploader(
@@ -363,7 +363,7 @@ def render_email_form():
         # Refresh models button
         if st.button("Refresh Models List"):
             st.session_state.ai_models = get_available_models()
-            st.experimental_rerun()
+            st.rerun()
 
         # Generate template button
         generate_col, cancel_col = st.columns([3, 1])
@@ -434,7 +434,7 @@ def render_email_form():
                             )
 
                         st.success("Template generated successfully!")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error(
                             f"Failed to generate template: {result.get('error', 'Unknown error')}"
@@ -444,7 +444,7 @@ def render_email_form():
             if st.button("Cancel", disabled=not is_request_in_progress()):
                 if cancel_ai_request():
                     st.warning("Request cancelled")
-                    st.experimental_rerun()
+                    st.rerun()
 
         # 4. Email Configuration section
         st.header("Email Configuration")
@@ -487,11 +487,8 @@ def render_email_form():
         company_name = st.session_state.company_name
         position_name = st.session_state.position
 
-        # If we don't have recipient name but have email, extract from email
-        if not recipient_name and st.session_state.recipient_email:
-            from utils import extract_name
-
-            recipient_name = extract_name(st.session_state.recipient_email)
+        # Don't extract from email - only use job description data
+        # If recipient_name is empty, we'll use the fallback
 
         # Extract first name for more personalized greeting
         first_name = ""
@@ -499,6 +496,9 @@ def render_email_form():
             name_parts = recipient_name.split()
             if name_parts:
                 first_name = name_parts[0]  # Get first name
+
+        # Use "Hiring Manager" if no valid name is found
+        display_name = first_name if first_name else "Hiring Manager"
 
         # Update subject with position if available
         if (
@@ -529,9 +529,7 @@ def render_email_form():
         greeting = st.session_state.current_template["greeting"]
         if "{name}" in greeting:
             # Use first name if available, otherwise use full name or fallback
-            greeting = greeting.replace(
-                "{name}", first_name or recipient_name or "Hiring Manager"
-            )
+            greeting = greeting.replace("{name}", display_name)
 
         body = st.session_state.current_template["body"]
         if "{position}" in body:
