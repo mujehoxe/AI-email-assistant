@@ -1,47 +1,62 @@
-# AI Email Assistant
+# Email Generator
 
-An AI-powered tool to create personalized job application emails using AI models from G4F.
+An AI-powered application to help create personalized job application emails based on job descriptions and your resume.
 
 ## Features
 
-- AI-generated email templates based on job descriptions
-- Dynamic model selection from available G4F models
-- Resume parsing and analysis
-- Email configuration with automatic SMTP detection
-- Clipboard functionality for easy template copying
-- Docker and Render deployment support
+- Upload your resume (PDF, DOCX) and automatically extract text
+- Generate personalized emails based on job descriptions
+- Persist resume data between sessions
+- Extract company name, contact name, and email from job descriptions
+- Save and manage email templates
+- Select from multiple AI models (requires G4F API server)
+- Directly send emails from the application
+- Copy generated email to clipboard
 
-## Local Setup
+## Setup Instructions
 
-1. Clone this repository
+### Local Setup
+
+1. Clone the repository
 2. Install dependencies:
    ```
    pip install -r requirements.txt
    ```
-3. Create a `.env` file with your email settings:
-   ```
-   EMAIL_ADDRESS=your.email@example.com
-   EMAIL_PASSWORD=your-email-password
-   ```
-4. Run the Streamlit app:
+3. Create a `.env` file with your email credentials (see `.env.example`)
+4. Run the application:
    ```
    streamlit run app.py
    ```
-5. Run the G4F API server (in a separate terminal):
+
+### Using Docker
+
+1. Build the Docker image:
    ```
-   python -c "from g4f.api import run_api; run_api()"
+   docker build -t email-generator .
+   ```
+2. Run the container:
+   ```
+   docker run -p 8501:8501 -p 1337:1337 -v $(pwd)/data:/app/data email-generator
    ```
 
-## Docker Setup
+### Deployment on render.com
 
-You can also run the application using Docker:
+1. Fork or clone this repository to your GitHub account
+2. Sign up for a [render.com](https://render.com) account
+3. Create a new Web Service and connect your repository
+4. Select "Docker" as the environment
+5. Under Advanced, add the following environment variables:
+   - `EMAIL_ADDRESS`: Your email address
+   - `EMAIL_PASSWORD`: Your email app password
+   - `SMTP_SERVER`: Your SMTP server (e.g., smtp.gmail.com)
+   - `SMTP_PORT`: Your SMTP port (usually 587)
+6. Click "Create Web Service"
 
-```bash
-docker build -t email-ai-assistant .
-docker run -p 8501:8501 -p 1337:1337 email-ai-assistant
-```
+**Note:** On render.com, the G4F API server runs inside the same container as the Streamlit app, so you don't need to configure separate ports.
 
-Alternatively, you can use the prebuilt G4F image:
+## Docker Setup for G4F API
+
+If you want to run only the G4F API server (advanced setup):
 
 ```bash
 docker run \
@@ -51,49 +66,22 @@ docker run \
   hlohaus789/g4f:latest-slim
 ```
 
-And then run the Streamlit app separately:
+Then configure `G4F_API_HOST` and `G4F_API_PORT` in your `.env` file to point to this server.
 
-```bash
-streamlit run app.py
-```
+## Troubleshooting
 
-### Troubleshooting Docker
+### Email Sending Issues
 
-If the G4F API server is not working properly, try these steps:
+- For Gmail, create an app password: [Google Account Help](https://support.google.com/accounts/answer/185833)
+- Check if your SMTP settings are correct
 
-1. Ensure ports 1337 and 8080 are available and not being used by other services
-2. Make sure Docker has permission to create and access the mounted volumes
-3. Check Docker logs for any error messages:
-   ```bash
-   docker ps -a  # Get container ID
-   docker logs <container_id>
-   ```
-4. If issues persist, try restarting the Docker daemon:
-   ```bash
-   sudo systemctl restart docker
-   ```
-5. Verify the API server is running by accessing: http://localhost:1337/models
+### G4F API Connection
 
-## Deployment on Render
+- If the API status shows "Not Running", try using the "Start G4F API Server" button
+- If models aren't loading, click "Refresh Models List"
+- Check if port 1337 is accessible and not blocked by your network or firewall
 
-This application can be deployed to Render using the included configuration:
+### Resume Parsing
 
-1. Fork this repository to your GitHub account
-2. Sign up for a [Render](https://render.com/) account
-3. Create a new Web Service in Render
-4. Connect your GitHub repository
-5. Select "Docker" as the environment
-6. Set the following environment variables:
-   - G4F_API_HOST=localhost
-   - G4F_API_PORT=1337
-7. Click "Create Web Service"
-
-The application will be deployed and both the Streamlit app and G4F API server will run in the same container.
-
-## Configuration
-
-Email settings can be configured in the sidebar. The application will attempt to automatically detect the SMTP server based on your email domain.
-
-## Available Models
-
-The application fetches available models from the G4F API server. If the server is not running or cannot be reached, a list of fallback models will be used instead.
+- Make sure PyPDF2 and python-docx are installed correctly
+- Only PDF and DOCX formats are supported

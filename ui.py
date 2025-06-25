@@ -352,7 +352,7 @@ def render_email_form():
                     st.session_state["recipient_email"] = contact_info["email"]
                     st.info(f"Contact email extracted: {contact_info['email']}")
 
-        # 3. Template generator section - MOVED UP
+        # 3. AI Template Generator section (MOVED FROM BELOW)
         st.header("AI Template Generator")
 
         # Check API server status

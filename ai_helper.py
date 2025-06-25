@@ -42,7 +42,7 @@ def get_available_models():
     """Get list of available models from G4F API"""
     try:
         # Try to get models from API
-        response = requests.get(f"{G4F_API_BASE_URL}/models", timeout=5)
+        response = requests.get(f"{G4F_API_BASE_URL}/models")
         if response.status_code == 200:
             models_data = response.json()
 
@@ -72,14 +72,6 @@ def get_available_models():
                     return available_models
 
             st.warning("API returned models but in unexpected format")
-    except requests.exceptions.ConnectionError:
-        st.warning(
-            f"Could not connect to G4F API at {G4F_API_BASE_URL}. Please make sure the Docker container is running on port {G4F_API_PORT}."
-        )
-    except requests.exceptions.Timeout:
-        st.warning(
-            f"Connection to G4F API timed out. API server might be starting up or overloaded."
-        )
     except Exception as e:
         st.warning(f"Could not fetch available models from G4F API: {e}")
 
@@ -228,7 +220,7 @@ def start_g4f_api_server():
 def check_api_server_status():
     """Check if the G4F API server is running"""
     try:
-        response = requests.get(f"{G4F_API_BASE_URL}/models", timeout=3)
+        response = requests.get(f"{G4F_API_BASE_URL}/models")
         if response.status_code == 200:
             # Also try to update models when checking status
             try:
@@ -239,20 +231,9 @@ def check_api_server_status():
             except:
                 pass
             return True
-        else:
-            st.warning(f"API server returned status code: {response.status_code}")
-            return False
-    except requests.exceptions.ConnectionError:
-        st.warning(
-            f"Could not connect to G4F API at {G4F_API_BASE_URL}. Make sure the Docker container is running."
-        )
-        return False
-    except requests.exceptions.Timeout:
-        st.warning("Connection to G4F API timed out. Server might be starting up.")
-        return False
-    except Exception as e:
-        st.warning(f"Error checking API server status: {str(e)}")
-        return False
+    except:
+        pass
+    return False
 
 
 def get_ai_client():

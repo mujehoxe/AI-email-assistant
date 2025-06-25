@@ -1,43 +1,27 @@
-FROM python:3.10-slim
+# Start with the G4F image
+FROM hlohaus789/g4f:latest-slim
 
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install additional dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
+    python3-pip \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy application files
 COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Create directories for G4F
-RUN mkdir -p /app/har_and_cookies
-RUN mkdir -p /app/generated_media
+# Create required directories
+RUN mkdir -p data har_and_cookies generated_media
 
-# Expose ports
-EXPOSE 8501 1337
+# Set environment variable for port
+ENV PORT=8501
 
-# Create startup script to run both the G4F API server and Streamlit app
-RUN echo '#!/bin/bash\n\
-# Start G4F API server in the background\n\
-python -c "from g4f.api import run_api; run_api(host=\"0.0.0.0\", port=1337)" &\n\
-\n\
-# Wait a moment for G4F to start\n\
-sleep 5\n\
-\n\
-# Start Streamlit app\n\
-streamlit run app.py --server.port=8501 --server.address=0.0.0.0\n\
-' > /app/start.sh
-
-RUN chmod +x /app/start.sh
-
-# Set the entry point
-ENTRYPOINT ["/app/start.sh"] 
+# Start both G4F server and Streamlit
+CMD sh -c "python -m g4f.api.server & streamlit run app.py --server.port $PORT --server.address 0.0.0.0" 
