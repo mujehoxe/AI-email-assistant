@@ -12,13 +12,14 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 
 # Configuration
 G4F_API_HOST = os.environ.get("G4F_API_HOST", "localhost")
-G4F_API_PORT = int(os.environ.get("G4F_API_PORT", "1337"))
+G4F_API_PORT = int(os.environ.get("G4F_API_PORT", "8080"))
 G4F_API_BASE_URL = f"http://{G4F_API_HOST}:{G4F_API_PORT}/v1"
 
 # Default model and fallback models
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "llama-4-scout"
 FALLBACK_MODELS = [
-    "gpt-4o",  # Default
+    "llama-4-scout",  # Default
+    "gpt-4o",
     "gpt-3.5-turbo",
     "gpt-4",
     "claude-3-opus",
@@ -65,6 +66,18 @@ def extract_company_name(job_description: str) -> str:
             if company_name:
                 return company_name
 
+    # If no company name found, try to extract from emails in the job description
+    emails = extract_email_from_text(job_description)
+    if emails:
+        # Try to get company name from email domain
+        email = emails if isinstance(emails, str) else emails[0]
+        domain = email.split('@')[-1]
+        if domain:
+            # Remove TLD (.com, .org, etc.) and convert to title case
+            company = domain.split('.')[0].title()
+            if company and len(company) > 2:  # Ensure it's a meaningful name
+                return company
+
     return ""
 
 
@@ -106,9 +119,28 @@ def extract_contact_info(job_description: str) -> ContactInfo:
 
     # If name not found in job description but we have email, extract from email
     if not name and email:
-        from utils import extract_name
-
-        name = extract_name(email)
+        # Try to extract name from the email address
+        local_part = email.split('@')[0]
+        
+        # Try different common email formats
+        if '.' in local_part:  # firstname.lastname@domain.com
+            parts = local_part.split('.')
+            name = ' '.join(part.title() for part in parts)
+        elif '_' in local_part:  # firstname_lastname@domain.com
+            parts = local_part.split('_')
+            name = ' '.join(part.title() for part in parts)
+        elif '-' in local_part:  # firstname-lastname@domain.com
+            parts = local_part.split('-')
+            name = ' '.join(part.title() for part in parts)
+        else:
+            # Try to detect if it's a name by checking if it contains digits
+            if not any(c.isdigit() for c in local_part):
+                name = local_part.title()
+        
+        # If we couldn't extract a name from email, fall back to utils.extract_name
+        if not name:
+            from utils import extract_name
+            name = extract_name(email)
 
     # Filter out generic or invalid names
     generic_names = [
@@ -134,6 +166,15 @@ def extract_contact_info(job_description: str) -> ContactInfo:
     # Check if the extracted name is generic
     if name.lower() in generic_names or len(name) <= 2:
         name = ""  # Clear the name if it's generic
+
+    # If company name is not found but we have email, try to extract from email domain
+    if not company_name and email:
+        domain = email.split('@')[-1]
+        if domain:
+            # Remove TLD (.com, .org, etc.) and convert to title case
+            company = domain.split('.')[0].title()
+            if company and len(company) > 2:  # Ensure it's a meaningful name
+                company_name = company
 
     return {"email": email, "name": name, "company": company_name}
 
@@ -253,18 +294,25 @@ def get_g4f_model_from_name(model_name: str):
     """Map OpenAI model name to g4f provider if possible"""
     try:
         import g4f
-
+        from g4f.models import (
+            gpt_4,
+            gpt_4_turbo,
+            claude_3_opus,
+            claude_3_sonnet,
+            gemini_pro,
+        )
+        
         model_map = {
-            "gpt-4o": g4f.models.gpt_4o_mini,
-            "gpt-3.5-turbo": g4f.models.gpt_35_turbo,
-            "gpt-4": g4f.models.gpt_4,
-            "gpt-4-turbo": g4f.models.gpt_4_turbo,
-            "claude-3-opus": g4f.models.claude_3_opus,
-            "claude-3-sonnet": g4f.models.claude_3_sonnet,
-            "gemini-pro": g4f.models.gemini_pro,
+            "gpt-4o": gpt_4_turbo,  # Using gpt_4_turbo as fallback for gpt-4o
+            "gpt-3.5-turbo": gpt_4,  # Using gpt_4 as fallback since gpt_35_turbo doesn't exist
+            "gpt-4": gpt_4,
+            "gpt-4-turbo": gpt_4_turbo,
+            "claude-3-opus": claude_3_opus,
+            "claude-3-sonnet": claude_3_sonnet,
+            "gemini-pro": gemini_pro,
         }
 
-        return model_map.get(model_name, g4f.models.gpt_35_turbo)
+        return model_map.get(model_name, gpt_4)  # Default to gpt_4 if model not found
     except ImportError:
         st.error("Failed to import g4f. Make sure g4f is installed.")
         return None
@@ -279,10 +327,13 @@ def create_prompt(
     """Create prompt for AI model"""
     # Extract first name if full name is available
     first_name = ""
+    last_name = ""
     if contact_info["name"]:
         name_parts = contact_info["name"].split()
         if name_parts:
             first_name = name_parts[0]
+            if len(name_parts) > 1:
+                last_name = name_parts[-1]
 
     return f"""
     Create a personalized email template for a job application based on this information:
@@ -302,6 +353,7 @@ def create_prompt(
     Email: {contact_info['email']}
     Name: {contact_info['name']}
     First Name: {first_name}
+    Last Name: {last_name}
     Company: {contact_info['company'] or 'Not found (which is okay)'}
     
     Please create:
@@ -315,13 +367,15 @@ def create_prompt(
        - DO NOT use a full name in the greeting
     6. Keep the placeholder {{{{name}}}} in the greeting, but make sure the instructions specify to use first or last name only
     7. Keep the placeholder {{{{position}}}} where appropriate
-    8. If a company name was detected, mention it in the body. If no company name was found, that's okay - don't use a placeholder
+    8. If a company name was detected, mention it in the body. If no company name was found, try to extract it from the email domain (e.g., "acme" from "jobs@acme.com")
     
     Important: 
     - Only extract information from the job description, not the resume
     - Use the resume only to match skills and experience to the job requirements
-    - If you don't have a company name, leave the company field empty. DO NOT use placeholder text like "the company" or "[Company Name]"
-    - If the recipient name is missing, invalid, or generic (like "at", "hr", "info", "jobs", "careers", "admin", etc.), leave the recipient_name field empty in your response and use "Hiring Manager" in the greeting
+    - If you don't have a company name, try to extract it from the email domain if available
+    - If you can't determine a company name, leave the company field empty. DO NOT use placeholder text like "the company" or "[Company Name]"
+    - If the recipient name is missing, try to extract it from the email address (e.g., "John Smith" from "john.smith@company.com")
+    - If the recipient name is still missing, invalid, or generic (like "at", "hr", "info", "jobs", "careers", "admin", etc.), leave the recipient_name field empty in your response and use "Hiring Manager" in the greeting
     
     Format your response as a valid JSON object with the following structure:
     
@@ -330,9 +384,9 @@ def create_prompt(
       "body": "Your email body here",
       "signature": "Your signature here",
       "position": "Extracted position from job description",
-      "employer": "Extracted employer name from job description if found",
+      "employer": "Extracted employer name from job description or email domain if found",
       "subject": "Suggested email subject",
-      "recipient_name": "Extracted recipient name from job description if found (leave empty if invalid or generic)",
+      "recipient_name": "Extracted recipient name from job description or email if found (leave empty if invalid or generic)",
       "recipient_email": "Extracted email from job description if found"
     }}
     """

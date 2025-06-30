@@ -548,7 +548,7 @@ def render_email_form():
         preview_greeting = st.text_area(
             "Edit greeting",
             greeting,
-            height=50,
+            height=68,
             key="preview_greeting",
         )
 
