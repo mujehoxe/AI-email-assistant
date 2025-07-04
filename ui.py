@@ -3,6 +3,9 @@ from utils import extract_name, send_email
 from template_manager import save_template
 from ai_helper import (
     generate_improved_template,
+    generate_customized_resume,
+    modify_original_resume_document,
+    get_resume_file_extension,
     start_g4f_api_server,
     cancel_ai_request,
     is_request_in_progress,
@@ -230,224 +233,552 @@ def render_email_form():
         st.session_state.resume_content = ""
     if "resume_filename" not in st.session_state:
         st.session_state.resume_filename = ""
+    if "customized_resume" not in st.session_state:
+        st.session_state.customized_resume = ""
+    if "use_customized_resume" not in st.session_state:
+        st.session_state.use_customized_resume = False
+    if "customized_resume_docx" not in st.session_state:
+        st.session_state.customized_resume_docx = None
+    if "customized_resume_filename" not in st.session_state:
+        st.session_state.customized_resume_filename = ""
 
     # Render email settings in sidebar
     render_email_settings_sidebar()
 
-    # Create a two-column layout for the main content
+    # Create multi-page layout using tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📄 Resume Upload", 
+        "📝 Job Description", 
+        "🎯 Resume Customization", 
+        "📧 Template Generation", 
+        "✉️ Email Sending"
+    ])
+
+    with tab1:
+        render_resume_upload_tab()
+    
+    with tab2:
+        render_job_description_tab()
+    
+    with tab3:
+        render_resume_customization_tab()
+    
+    with tab4:
+        render_template_generation_tab()
+    
+    with tab5:
+        render_email_sending_tab()
+
+
+def render_resume_upload_tab():
+    """Render the resume upload and processing tab"""
+    st.header("Resume Upload & Processing")
+    
+    # Try to load resume data from disk at the start
+    if not st.session_state.resume_content:
+        resume_data = load_resume_from_disk()
+        if resume_data:
+            st.session_state.resume_filename = resume_data["filename"]
+            st.session_state.resume_content = resume_data["content"]
+            st.session_state.resume_file_bytes = resume_data.get("file_bytes", None)
+
+    # Display currently loaded resume if any
+    if st.session_state.resume_filename:
+        st.info(f"Currently loaded resume: {st.session_state.resume_filename}")
+
+        # Add option to clear the loaded resume
+        if st.button("Clear Resume", key="clear_resume_upload"):
+            st.session_state.resume_content = ""
+            st.session_state.resume_filename = ""
+            st.session_state.resume_file_bytes = None
+            st.session_state.customized_resume = ""
+            st.session_state.customized_resume_docx = None
+            st.session_state.customized_resume_filename = ""
+            st.session_state.use_customized_resume = False
+
+            # Remove the disk file too
+            if os.path.exists(RESUME_STORAGE_PATH):
+                os.remove(RESUME_STORAGE_PATH)
+
+            st.rerun()
+
+    # File uploader with key to ensure proper state tracking
+    resume_file = st.file_uploader(
+        "Upload your resume (PDF or DOCX)",
+        type=["pdf", "docx"],
+        key="resume_uploader",
+    )
+
+    # Process the file if a new one was uploaded
+    if resume_file is not None:
+        # Check if this is a new file upload or different from stored file
+        if (
+            not st.session_state.resume_filename
+            or st.session_state.resume_filename != resume_file.name
+        ):
+            try:
+                if resume_file.name.endswith(".pdf"):
+                    from PyPDF2 import PdfReader
+
+                    pdf = PdfReader(resume_file)
+                    resume_content = ""
+                    for page in pdf.pages:
+                        resume_content += page.extract_text()
+                elif resume_file.name.endswith(".docx"):
+                    from docx import Document
+
+                    doc = Document(resume_file)
+                    resume_content = "\n".join(
+                        [para.text for para in doc.paragraphs]
+                    )
+
+                # Store file content and name in session state
+                st.session_state.resume_content = resume_content
+                st.session_state.resume_filename = resume_file.name
+
+                # Store the raw file bytes for sending as attachment
+                file_bytes = resume_file.getvalue()
+                st.session_state.resume_file_bytes = file_bytes
+
+                # Save to disk for persistence
+                save_resume_to_disk(resume_file.name, resume_content, file_bytes)
+
+                st.success(f"Resume processed: {resume_file.name}")
+            except Exception as e:
+                st.error(f"Error processing resume: {str(e)}")
+
+    # Show resume preview if we have content (from any source)
+    if st.session_state.resume_content and resume_parsing_available:
+        with st.expander("Resume Preview"):
+            preview = (
+                st.session_state.resume_content[:1000] + "..."
+                if len(st.session_state.resume_content) > 1000
+                else st.session_state.resume_content
+            )
+            st.text_area("Extracted Text", value=preview, height=150)
+
+    # Status and next steps
+    if st.session_state.resume_content:
+        st.success("✅ Resume loaded successfully! You can now proceed to the next tab.")
+    else:
+        st.info("📤 Please upload your resume to continue.")
+
+
+def render_job_description_tab():
+    """Render the job description input tab"""
+    st.header("Job Description")
+    
+    # Check if resume is uploaded
+    if not st.session_state.resume_content:
+        st.warning("⚠️ Please upload your resume in the 'Resume Upload' tab first.")
+        return
+
+    st.info("📝 Enter the job description for the position you're applying to. This will be used to customize your resume and generate a personalized email template.")
+    
+    job_description = st.text_area(
+        "Paste job description here",
+        value=st.session_state.get("job_description", ""),
+        height=400,
+        key="job_description",
+        help="Copy and paste the complete job description, including requirements, responsibilities, and company information."
+    )
+    
+    # Status and next steps
+    if job_description:
+        st.success("✅ Job description added! You can now proceed to resume customization.")
+        
+        # Show some extracted information preview
+        if len(job_description) > 100:
+            st.markdown("#### Quick Analysis")
+            
+            # Extract some basic info for preview
+            from ai_helper import extract_contact_info
+            contact_info = extract_contact_info(job_description)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if contact_info.get('company'):
+                    st.metric("Company Detected", contact_info['company'])
+                else:
+                    st.metric("Company Detected", "Not found")
+            
+            with col2:
+                if contact_info.get('email'):
+                    st.metric("Contact Email", "Found")
+                else:
+                    st.metric("Contact Email", "Not found")
+            
+            with col3:
+                word_count = len(job_description.split())
+                st.metric("Word Count", f"{word_count} words")
+    else:
+        st.info("📝 Please paste the job description to continue.")
+
+
+def render_resume_customization_tab():
+    """Render the resume customization tab"""
+    st.header("Resume Customization")
+    
+    # Check prerequisites
+    if not st.session_state.resume_content:
+        st.warning("⚠️ Please upload your resume in the 'Resume Upload' tab first.")
+        return
+    
+    job_description = st.session_state.get("job_description", "")
+    if not job_description:
+        st.warning("⚠️ Please add a job description in the 'Job Description' tab first.")
+        return
+
+    st.info("🎯 Create a customized version of your resume that's tailored specifically to this job description. This will highlight your most relevant experience and skills.")
+    
+    # Resume customization controls
+    customize_col, customize_cancel_col = st.columns([3, 1])
+    
+    with customize_col:
+        if st.button(
+            "Generate Customized Resume",
+            disabled=is_request_in_progress(),
+            help="Create a version of your resume tailored to this job description",
+            type="primary",
+            key="generate_customized_resume"
+        ):
+            with st.spinner("Customizing your resume..."):
+                # Get the selected model (same as email generation)
+                if "ai_models" not in st.session_state:
+                    st.session_state.ai_models = get_available_models()
+                
+                # Find default model index
+                default_index = 0
+                if DEFAULT_MODEL in st.session_state.ai_models:
+                    default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
+                
+                selected_model = st.session_state.ai_models[default_index] if st.session_state.ai_models else DEFAULT_MODEL
+                
+                # Generate complete customized resume with proper structure
+                from ai_helper import generate_complete_customized_resume
+                
+                result = generate_complete_customized_resume(
+                    st.session_state.resume_content,
+                    job_description,
+                    model=selected_model
+                )
+                
+                if result.get("success", False):
+                    st.session_state.customized_resume = result["customized_resume"]
+                    st.session_state.use_customized_resume = True
+                    
+                    # Now create the customized document using the original file
+                    if hasattr(st.session_state, 'resume_file_bytes') and st.session_state.resume_file_bytes:
+                        from ai_helper import modify_original_resume_document
+                        
+                        # Modify the original document while preserving styling
+                        customized_doc = modify_original_resume_document(
+                            st.session_state.resume_file_bytes,
+                            st.session_state.customized_resume,
+                            st.session_state.resume_filename
+                        )
+                        
+                        if customized_doc:
+                            st.session_state.customized_resume_docx = customized_doc
+                            base_name = st.session_state.resume_filename.rsplit('.', 1)[0]
+                            original_ext = get_resume_file_extension(st.session_state.resume_filename)
+                            st.session_state.customized_resume_filename = f"{base_name}_customized.{original_ext}"
+                            st.success("📄 Professional document created preserving original styling!")
+                        else:
+                            st.warning("⚠️ Could not create styled document, but customized text is available.")
+                    else:
+                        st.warning("⚠️ Original file not available for styling preservation. Text customization completed.")
+                    
+                    st.success("✅ Customized resume generated successfully!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to generate customized resume: {result.get('error', 'Unknown error')}")
+    
+    with customize_cancel_col:
+        if st.button("Cancel", disabled=not is_request_in_progress(), key="cancel_resume_customization"):
+            if cancel_ai_request():
+                st.warning("Resume generation cancelled")
+                st.rerun()
+
+    # Show customized resume if available
+    if st.session_state.customized_resume:
+        st.markdown("### ✅ Customized Resume Generated")
+        
+        # Toggle between original and customized resume
+        resume_choice = st.radio(
+            "Choose which resume version to use:",
+            options=["Use Original Resume", "Use Customized Resume"],
+            index=1 if st.session_state.use_customized_resume else 0,
+            horizontal=True
+        )
+        
+        st.session_state.use_customized_resume = (resume_choice == "Use Customized Resume")
+        
+        # Prominent Download Section
+        st.markdown("### 📥 Download Your Customized Resume")
+        
+        # Download buttons in prominent location
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            st.download_button(
+                label="📄 Download as Text",
+                data=st.session_state.customized_resume,
+                file_name="customized_resume.txt",
+                mime="text/plain",
+                help="Download the customized resume as a text file",
+                use_container_width=True
+            )
+        
+        with col2:
+            # Show styled document download button if available
+            if st.session_state.customized_resume_docx and st.session_state.customized_resume_filename:
+                # Determine file type and appropriate mime type
+                file_ext = get_resume_file_extension(st.session_state.customized_resume_filename)
+                if file_ext == "pdf":
+                    mime_type = "application/pdf"
+                    label = "📄 Download as PDF"
+                    help_text = "Download the customized resume as a styled PDF document"
+                else:  # docx
+                    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    label = "📄 Download as Word"
+                    help_text = "Download the customized resume as a styled Word document"
+                
+                st.download_button(
+                    label=label,
+                    data=st.session_state.customized_resume_docx.getvalue(),
+                    file_name=st.session_state.customized_resume_filename,
+                    mime=mime_type,
+                    help=help_text,
+                    use_container_width=True
+                )
+            else:
+                st.info("📄 Styled document not available")
+        
+        with col3:
+            if st.button("🔄 Regenerate Resume", help="Generate a new customized version", use_container_width=True):
+                st.session_state.customized_resume = ""
+                st.session_state.customized_resume_docx = None
+                st.session_state.customized_resume_filename = ""
+                st.session_state.use_customized_resume = False
+                st.rerun()
+        
+        
+        # Text Preview Section (Collapsible)
+        with st.expander("📝 View Text Content", expanded=False):
+            st.text_area(
+                "Customized Resume Text Content",
+                value=st.session_state.customized_resume,
+                height=400,
+                disabled=True,
+                help="This is the text content used to generate your styled document"
+            )
+        
+        # Option to clear customized resume
+        if st.button("🗑️ Clear Customized Resume", key="clear_customized_resume"):
+            st.session_state.customized_resume = ""
+            st.session_state.customized_resume_docx = None
+            st.session_state.customized_resume_filename = ""
+            st.session_state.use_customized_resume = False
+            st.rerun()
+        
+        # Status
+        st.success("✅ Customized resume ready! You can now proceed to template generation.")
+    
+    else:
+        st.info("👆 Click 'Generate Customized Resume' to create a tailored version of your resume for this job.")
+
+
+def render_template_generation_tab():
+    """Render the email template generation tab"""
+    st.header("Email Template Generation")
+    
+    # Check prerequisites
+    if not st.session_state.resume_content:
+        st.warning("⚠️ Please upload your resume in the 'Resume Upload' tab first.")
+        return
+    
+    job_description = st.session_state.get("job_description", "")
+    if not job_description:
+        st.warning("⚠️ Please add a job description in the 'Job Description' tab first.")
+        return
+
+    st.info("📧 Generate a personalized email template using AI. Choose whether to use your original or customized resume.")
+    
+    # Show which resume will be used
+    if st.session_state.customized_resume:
+        if st.session_state.use_customized_resume:
+            st.success("🎯 Using customized resume for template generation")
+        else:
+            st.info("📄 Using original resume for template generation")
+        
+        # Allow user to change resume choice
+        resume_choice = st.radio(
+            "Which resume version do you want to use?",
+            options=["Use Original Resume", "Use Customized Resume"],
+            index=1 if st.session_state.use_customized_resume else 0,
+            horizontal=True
+        )
+        st.session_state.use_customized_resume = (resume_choice == "Use Customized Resume")
+    else:
+        st.info("📄 Using original resume (no customized version available)")
+
+    # AI Model Configuration
+    st.markdown("### AI Model Configuration")
+    
+    # Check API server status
+    server_status = "Not Running"
+    if check_api_server_status():
+        server_status = "Running"
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f"**API Server Status:** {server_status}")
+
+    # Get available models
+    if "ai_models" not in st.session_state:
+        st.session_state.ai_models = get_available_models()
+
+    model_count = len(st.session_state.ai_models)
+    st.markdown(f"**Available Models:** {model_count}")
+
+    # Find default model index
+    default_index = 0
+    if DEFAULT_MODEL in st.session_state.ai_models:
+        default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
+
+    # Model selection
+    selected_model = st.selectbox(
+        "Select AI Model",
+        options=st.session_state.ai_models,
+        index=default_index,
+    )
+
+    # Refresh models button
+    if st.button("Refresh Models List", key="refresh_models_list"):
+        st.session_state.ai_models = get_available_models()
+        st.rerun()
+
+    # Generate template section
+    st.markdown("### Generate Email Template")
+    
+    # Generate template button
+    generate_col, cancel_col = st.columns([3, 1])
+
+    with generate_col:
+        if generate_button := st.button(
+            "Generate Email Template",
+            disabled=is_request_in_progress(),
+            type="primary",
+            key="generate_email_template"
+        ):
+            with st.spinner("Generating personalized email template..."):
+                # Get current template for reference
+                current_template = st.session_state.current_template
+
+                # Choose which resume to use based on user preference
+                resume_to_use = st.session_state.resume_content
+                if st.session_state.use_customized_resume and st.session_state.customized_resume:
+                    resume_to_use = st.session_state.customized_resume
+
+                # Generate template using selected resume content
+                result = generate_improved_template(
+                    job_description,
+                    resume_to_use,
+                    current_template,
+                    model=selected_model,
+                )
+
+                # Store result in session state
+                st.session_state.result = result
+
+                if result.get("success", False):
+                    template = result["template"]
+
+                    # Update template in session state
+                    st.session_state.current_template = {
+                        "greeting": template.get("greeting", ""),
+                        "body": template.get("body", ""),
+                        "signature": template.get("signature", ""),
+                    }
+
+                    # Update other extracted information if they exist and are not empty
+                    if template.get("position"):
+                        st.session_state.position = template["position"]
+                        st.success(f"✅ Position extracted: {template['position']}")
+
+                    if template.get("employer") and template["employer"]:
+                        st.session_state.company_name = template["employer"]
+                        st.success(f"✅ Company name extracted: {template['employer']}")
+                    elif template.get("company") and template["company"]:
+                        st.session_state.company_name = template["company"]
+                        st.success(f"✅ Company name extracted: {template['company']}")
+
+                    if template.get("subject"):
+                        st.session_state.subject = template["subject"]
+
+                    if template.get("recipient_email"):
+                        st.session_state.recipient_email = template["recipient_email"]
+                        st.info(f"📧 Contact email extracted: {template['recipient_email']}")
+
+                    if template.get("recipient_name"):
+                        st.session_state.recipient_name = template.get("recipient_name")
+                        st.info(f"👤 Contact name extracted: {template.get('recipient_name')}")
+
+                    st.success("🎉 Email template generated successfully! You can now proceed to email sending.")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Failed to generate template: {result.get('error', 'Unknown error')}")
+
+    with cancel_col:
+        if st.button("Cancel", disabled=not is_request_in_progress(), key="cancel_template_generation"):
+            if cancel_ai_request():
+                st.warning("Request cancelled")
+                st.rerun()
+
+    # Show template preview if available
+    if st.session_state.current_template.get("body"):
+        st.markdown("### Generated Template Preview")
+        
+        with st.expander("📧 View Generated Email Template", expanded=True):
+            st.markdown("**Greeting:**")
+            st.text(st.session_state.current_template.get("greeting", ""))
+            
+            st.markdown("**Body:**")
+            st.text(st.session_state.current_template.get("body", ""))
+            
+            st.markdown("**Signature:**")
+            st.text(st.session_state.current_template.get("signature", ""))
+        
+        st.success("✅ Template ready! Proceed to the 'Email Sending' tab to customize and send your email.")
+
+
+def render_email_sending_tab():
+    """Render the email sending and configuration tab"""
+    st.header("Email Sending & Configuration")
+    
+    # Check prerequisites
+    if not st.session_state.resume_content:
+        st.warning("⚠️ Please upload your resume in the 'Resume Upload' tab first.")
+        return
+    
+    # Check if we have a template loaded - if yes, skip job description requirement
+    if not st.session_state.current_template.get("body"):
+        st.warning("⚠️ Please generate an email template in the 'Template Generation' tab first, or load a template from the sidebar.")
+        return
+    
+    # Only require job description if no template is loaded
+    job_description = st.session_state.get("job_description", "")
+    if not job_description and not st.session_state.current_template.get("body"):
+        st.warning("⚠️ Please add a job description in the 'Job Description' tab first.")
+        return
+
+    # Create layout
     col1, col2 = st.columns([3, 2])
 
     with col1:
-        # REORDERED SECTIONS: Resume and Job Description first
-
-        # 1. Resume section
-        st.markdown("### Resume Upload")
-
-        # Try to load resume data from disk at the start
-        if not st.session_state.resume_content:
-            resume_data = load_resume_from_disk()
-            if resume_data:
-                st.session_state.resume_filename = resume_data["filename"]
-                st.session_state.resume_content = resume_data["content"]
-                st.session_state.resume_file_bytes = resume_data.get("file_bytes", None)
-
-        # Display currently loaded resume if any
-        if st.session_state.resume_filename:
-            st.info(f"Currently loaded resume: {st.session_state.resume_filename}")
-
-            # Add option to clear the loaded resume
-            if st.button("Clear Resume"):
-                st.session_state.resume_content = ""
-                st.session_state.resume_filename = ""
-                st.session_state.resume_file_bytes = None
-
-                # Remove the disk file too
-                if os.path.exists(RESUME_STORAGE_PATH):
-                    os.remove(RESUME_STORAGE_PATH)
-
-                st.rerun()
-
-        # File uploader with key to ensure proper state tracking
-        resume_file = st.file_uploader(
-            "Upload your resume (PDF or DOCX)",
-            type=["pdf", "docx"],
-            key="resume_uploader",
-        )
-
-        # Process the file if a new one was uploaded
-        if resume_file is not None:
-            # Check if this is a new file upload or different from stored file
-            if (
-                not st.session_state.resume_filename
-                or st.session_state.resume_filename != resume_file.name
-            ):
-                try:
-                    if resume_file.name.endswith(".pdf"):
-                        from PyPDF2 import PdfReader
-
-                        pdf = PdfReader(resume_file)
-                        resume_content = ""
-                        for page in pdf.pages:
-                            resume_content += page.extract_text()
-                    elif resume_file.name.endswith(".docx"):
-                        from docx import Document
-
-                        doc = Document(resume_file)
-                        resume_content = "\n".join(
-                            [para.text for para in doc.paragraphs]
-                        )
-
-                    # Store file content and name in session state
-                    st.session_state.resume_content = resume_content
-                    st.session_state.resume_filename = resume_file.name
-
-                    # Store the raw file bytes for sending as attachment
-                    file_bytes = resume_file.getvalue()
-                    st.session_state.resume_file_bytes = file_bytes
-
-                    # Save to disk for persistence
-                    save_resume_to_disk(resume_file.name, resume_content, file_bytes)
-
-                    st.success(f"Resume processed: {resume_file.name}")
-                except Exception as e:
-                    st.error(f"Error processing resume: {str(e)}")
-
-        # Show resume preview if we have content (from any source)
-        if st.session_state.resume_content and resume_parsing_available:
-            with st.expander("Resume Preview"):
-                preview = (
-                    st.session_state.resume_content[:1000] + "..."
-                    if len(st.session_state.resume_content) > 1000
-                    else st.session_state.resume_content
-                )
-                st.text_area("Extracted Text", value=preview, height=150)
-
-        # 2. Job Description section
-        st.markdown("### Job Description")
-        job_description = st.text_area(
-            "Paste job description here",
-            value=st.session_state.get("job_description", ""),
-            height=300,
-            key="job_description",
-        )
-
-        # 3. AI Template Generator section
-        st.header("AI Template Generator")
-
-        # Check API server status
-        server_status = "Not Running"
-        if check_api_server_status():
-            server_status = "Running"
-
-        st.markdown(f"API Server Status: **{server_status}**")
-
-        # Get available models
-        if "ai_models" not in st.session_state:
-            st.session_state.ai_models = get_available_models()
-
-        model_count = len(st.session_state.ai_models)
-        st.markdown(f"Available Models: **{model_count}**")
-
-        # Find default model index
-        default_index = 0
-        if DEFAULT_MODEL in st.session_state.ai_models:
-            default_index = st.session_state.ai_models.index(DEFAULT_MODEL)
-
-        # Model selection
-        selected_model = st.selectbox(
-            "Select AI Model",
-            options=st.session_state.ai_models,
-            index=default_index,
-        )
-
-        # Refresh models button
-        if st.button("Refresh Models List"):
-            st.session_state.ai_models = get_available_models()
-            st.rerun()
-
-        # Generate template button
-        generate_col, cancel_col = st.columns([3, 1])
-
-        with generate_col:
-            if generate_button := st.button(
-                "Generate Email Template",
-                disabled=is_request_in_progress()
-                or not job_description
-                or not st.session_state.resume_content,
-            ):
-                with st.spinner("Generating template..."):
-                    # Get current template for reference
-                    current_template = st.session_state.current_template
-
-                    # Generate template using cached resume content
-                    result = generate_improved_template(
-                        job_description,
-                        st.session_state.resume_content,
-                        current_template,
-                        model=selected_model,
-                    )
-
-                    # Store result in session state
-                    st.session_state.result = result
-
-                    if result.get("success", False):
-                        template = result["template"]
-
-                        # Update template in session state
-                        st.session_state.current_template = {
-                            "greeting": template.get("greeting", ""),
-                            "body": template.get("body", ""),
-                            "signature": template.get("signature", ""),
-                        }
-
-                        # Update other extracted information if they exist and are not empty
-                        if template.get("position"):
-                            st.session_state.position = template["position"]
-                            st.success(f"Position extracted: {template['position']}")
-
-                        if template.get("employer") and template["employer"]:
-                            st.session_state.company_name = template["employer"]
-                            st.success(
-                                f"Company name extracted: {template['employer']}"
-                            )
-                        elif template.get("company") and template["company"]:
-                            st.session_state.company_name = template["company"]
-                            st.success(f"Company name extracted: {template['company']}")
-
-                        if template.get("subject"):
-                            st.session_state.subject = template["subject"]
-
-                        if template.get("recipient_email"):
-                            st.session_state.recipient_email = template[
-                                "recipient_email"
-                            ]
-                            st.info(
-                                f"Contact email extracted: {template['recipient_email']}"
-                            )
-
-                        if template.get("recipient_name"):
-                            st.session_state.recipient_name = template.get(
-                                "recipient_name"
-                            )
-                            st.info(
-                                f"Contact name extracted: {template.get('recipient_name')}"
-                            )
-
-                        st.success("Template generated successfully!")
-                        st.rerun()
-                    else:
-                        st.error(
-                            f"Failed to generate template: {result.get('error', 'Unknown error')}"
-                        )
-
-        with cancel_col:
-            if st.button("Cancel", disabled=not is_request_in_progress()):
-                if cancel_ai_request():
-                    st.warning("Request cancelled")
-                    st.rerun()
-
-        # 4. Email Configuration section
-        st.header("Email Configuration")
+        # Email Configuration section
+        st.markdown("### Email Configuration")
 
         # Recipient information
         recipient_email = st.text_input(
@@ -573,7 +904,7 @@ def render_email_form():
 
         # Add Send Email button
         with col1:
-            if st.button("Send Email", type="primary"):
+            if st.button("Send Email", type="primary", key="send_email"):
                 if not recipient_email:
                     st.error("Please enter a recipient email address.")
                 elif not st.session_state.get("sender_email"):
@@ -584,19 +915,30 @@ def render_email_form():
                     # Get the resume file or create a temp file if we have cached content
                     attachment = None
 
-                    # If we have a fresh file upload, use that
-                    if resume_file:
-                        attachment = resume_file
-
-                    # Otherwise, if we have saved file bytes, create a BytesIO object
+                    # If user chose to use customized resume and it exists
+                    if st.session_state.use_customized_resume and st.session_state.customized_resume:
+                        # Check if we have a Word document version
+                        if st.session_state.customized_resume_docx and st.session_state.customized_resume_filename:
+                            attachment = st.session_state.customized_resume_docx
+                            attachment.name = st.session_state.customized_resume_filename
+                            st.info("📧 Attaching customized resume (Word document) to email")
+                        else:
+                            # Fall back to text version
+                            from io import BytesIO
+                            attachment = BytesIO(st.session_state.customized_resume.encode("utf-8"))
+                            base_name = st.session_state.resume_filename.rsplit('.', 1)[0] if st.session_state.resume_filename else "resume"
+                            attachment.name = f"{base_name}_customized.txt"
+                            st.info("📧 Attaching customized resume (text) to email")
+                    
+                    # Otherwise, use original resume
                     elif (
                         st.session_state.get("resume_file_bytes")
                         and st.session_state.resume_filename
                     ):
                         from io import BytesIO
-
                         attachment = BytesIO(st.session_state.resume_file_bytes)
                         attachment.name = st.session_state.resume_filename
+                        st.info("📧 Attaching original resume to email")
 
                     # As a last resort, if we only have the extracted text but no binary data
                     elif (
@@ -604,11 +946,9 @@ def render_email_form():
                         and st.session_state.resume_filename
                     ):
                         from io import BytesIO
-
-                        attachment = BytesIO(
-                            st.session_state.resume_content.encode("utf-8")
-                        )
+                        attachment = BytesIO(st.session_state.resume_content.encode("utf-8"))
                         attachment.name = st.session_state.resume_filename
+                        st.info("📧 Attaching original resume to email")
 
                     success, message = send_email(
                         recipient_email=recipient_email,
@@ -630,7 +970,7 @@ def render_email_form():
 
         # Copy to clipboard button
         with col2:
-            if st.button("Copy Template to Clipboard"):
+            if st.button("Copy Template to Clipboard", key="copy_template"):
                 full_email = (
                     f"{preview_greeting}\n\n{preview_body}\n\n{preview_signature}"
                 )
@@ -659,7 +999,7 @@ def render_email_form():
         st.markdown("### Save Template")
         template_name = st.text_input("Template Name", "")
 
-        if st.button("Save Template", disabled=not template_name):
+        if st.button("Save Template", disabled=not template_name, key="save_template"):
             if save_template(
                 template_name, preview_greeting, preview_body, preview_signature
             ):

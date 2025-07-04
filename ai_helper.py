@@ -9,6 +9,40 @@ import re
 import requests
 import openai
 from typing import Dict, List, Any, Optional, Union, Tuple
+import io
+
+# Try importing document libraries
+try:
+    import docx
+    from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+# Try importing PDF libraries
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
+try:
+    import pdfkit
+    PDFKIT_AVAILABLE = True
+except ImportError:
+    PDFKIT_AVAILABLE = False
 
 # Configuration
 G4F_API_HOST = os.environ.get("G4F_API_HOST", "localhost")
@@ -38,6 +72,7 @@ AVAILABLE_MODELS = FALLBACK_MODELS.copy()
 ContactInfo = Dict[str, str]
 TemplateData = Dict[str, str]
 APIResponse = Dict[str, Any]
+ResumeData = Dict[str, str]
 
 
 def extract_email_from_text(text: str) -> str:
@@ -597,6 +632,119 @@ def generate_improved_template(
         request_in_progress = False
 
 
+def modify_original_word_document(
+    original_file_bytes: bytes, 
+    customization_text: str, 
+    original_filename: str = ""
+) -> Optional[io.BytesIO]:
+    """Modify the original Word document by replacing its content while preserving the original formatting"""
+    if not DOCX_AVAILABLE:
+        st.warning("python-docx not available. Cannot modify Word document.")
+        return None
+    
+    try:
+        # Load the original document to preserve all formatting
+        doc = Document(io.BytesIO(original_file_bytes))
+        
+        # Get the original text to compare
+        original_text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+        
+        # Split customized text into lines
+        customized_lines = [line.strip() for line in customization_text.strip().split('\n') if line.strip()]
+        
+        # Try to intelligently replace content while preserving formatting
+        # This approach modifies existing paragraphs rather than clearing everything
+        
+        # Convert customized text to paragraph-by-paragraph mapping
+        customized_paragraphs = []
+        current_para = ""
+        
+        for line in customized_lines:
+            if line.strip():
+                if current_para and (line.endswith(':') or any(keyword in line.lower() for keyword in ['experience', 'education', 'skills', 'summary', 'professional'])):
+                    # This looks like a section header, finish current paragraph
+                    if current_para.strip():
+                        customized_paragraphs.append(current_para.strip())
+                    current_para = line
+                else:
+                    if current_para:
+                        current_para += " " + line
+                    else:
+                        current_para = line
+        
+        # Add the last paragraph
+        if current_para.strip():
+            customized_paragraphs.append(current_para.strip())
+        
+        # If we have fewer paragraphs in the customized version, extend to match
+        original_paragraph_count = len(doc.paragraphs)
+        customized_paragraph_count = len(customized_paragraphs)
+        
+        # Method 1: Try to replace paragraph by paragraph, preserving formatting
+        if customized_paragraph_count > 0:
+            for i, paragraph in enumerate(doc.paragraphs[:]):
+                if i < len(customized_paragraphs):
+                    # Replace the text while keeping the formatting
+                    new_text = customized_paragraphs[i]
+                    
+                    # Clear the paragraph text but keep the formatting
+                    if paragraph.runs:
+                        # Keep the first run's formatting and replace its text
+                        first_run = paragraph.runs[0]
+                        first_run.text = new_text
+                        
+                        # Remove any additional runs
+                        for run in paragraph.runs[1:]:
+                            run.text = ""
+                    else:
+                        # If no runs exist, add text with default formatting
+                        paragraph.add_run(new_text)
+                else:
+                    # Clear paragraphs that don't have corresponding content
+                    for run in paragraph.runs[:]:
+                        run.text = ""
+            
+            # If we have more customized content than original paragraphs, add new paragraphs
+            if customized_paragraph_count > original_paragraph_count:
+                for i in range(original_paragraph_count, customized_paragraph_count):
+                    new_para = doc.add_paragraph(customized_paragraphs[i])
+        
+        # Method 2: If the above doesn't work well, fall back to simple replacement
+        else:
+            # Fallback: Replace all content with customized text
+            # Clear existing content
+            for paragraph in doc.paragraphs[:]:
+                for run in paragraph.runs[:]:
+                    run.text = ""
+            
+            # Add customized content
+            if doc.paragraphs:
+                # Use the first paragraph for the customized content
+                doc.paragraphs[0].add_run(customization_text)
+            else:
+                # Add a new paragraph if none exist
+                doc.add_paragraph(customization_text)
+        
+        # Save to BytesIO
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+        
+        return doc_buffer
+        
+    except Exception as e:
+        st.error(f"Error modifying Word document: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
+
+
+def get_resume_file_extension(filename: str) -> str:
+    """Get file extension from filename"""
+    if not filename:
+        return ""
+    return filename.split('.')[-1].lower() if '.' in filename else ""
+
+
 def cancel_ai_request() -> bool:
     """Cancel an in-progress AI request"""
     global cancel_request, request_in_progress
@@ -611,3 +759,896 @@ def is_request_in_progress() -> bool:
     """Check if a request is in progress"""
     global request_in_progress
     return request_in_progress
+
+
+def create_resume_modification_prompt(
+    original_resume: str,
+    job_description: str,
+) -> str:
+    """Create prompt for AI model to suggest specific modifications to resume"""
+    return f"""
+    Based on the original resume and job description provided, suggest specific modifications to better align the resume with the job requirements while maintaining truthfulness and accuracy.
+
+    ## Original Resume:
+    {original_resume}
+    
+    ## Job Description:
+    {job_description}
+    
+    Please analyze the resume and suggest specific modifications in the following format:
+    
+    **IMPORTANT**: Do NOT generate a complete new resume. Instead, provide specific, actionable modifications that can be applied to the original text.
+    
+    For each suggested change, specify:
+    1. **Action**: ADD, REPLACE, REMOVE, or REORDER
+    2. **Location**: The specific text or section where the change should be applied
+    3. **Original**: The exact text to be modified (if REPLACE or REMOVE)
+    4. **New**: The replacement or additional text (if ADD or REPLACE)
+    5. **Reason**: Why this change improves alignment with the job requirements
+    
+    **PRIORITY MODIFICATIONS (Must Include):**
+    1. **Job Title Alignment**: If the resume doesn't have a job title that matches the position, ADD or REPLACE the current title with one that closely aligns with the job posting (e.g., "Software Engineer" → "Full Stack Developer" if applying for a Full Stack position)
+    2. **Professional Summary**: ADD a compelling 2-3 sentence professional summary at the top that highlights the candidate's most relevant experience and skills for this specific role. This should be tailored to the job description keywords and requirements.
+    
+    **Additional Guidelines:**
+    - Only suggest changes that enhance existing information from the original resume
+    - Do not fabricate experience, skills, or achievements
+    - Focus on keyword optimization, emphasis, and reorganization
+    - Suggest adding relevant skills that are already implied by the candidate's experience
+    - Recommend reordering sections or bullet points to highlight most relevant experience first
+    - Ensure the job title reflects the candidate's actual capabilities based on their experience
+    - Make the professional summary compelling and specific to the role, highlighting quantifiable achievements when available
+    
+    Format your response as a JSON object with the following structure:
+    
+    {{
+      "modifications": [
+        {{
+          "action": "REPLACE|ADD|REMOVE|REORDER",
+          "location": "Section name or specific text to locate the change",
+          "original": "Exact text to be replaced or removed (if applicable)",
+          "new": "New text to add or replace with (if applicable)",
+          "reason": "Explanation of why this change improves job alignment"
+        }}
+      ],
+      "summary": "Brief overview of the suggested changes and their impact"
+    }}
+    
+    Example modification:
+    {{
+      "action": "REPLACE",
+      "location": "Professional Summary",
+      "original": "Software Engineer with 5 years of experience",
+      "new": "Full Stack Developer with 5 years of experience in React, Node.js, and cloud technologies",
+      "reason": "Uses job title from posting and highlights specific technologies mentioned in requirements"
+    }}
+    """
+
+
+def create_pdf_from_text_reportlab(text_content: str, original_filename: str = "") -> Optional[io.BytesIO]:
+    """Create a professional PDF from text using ReportLab"""
+    if not REPORTLAB_AVAILABLE:
+        st.warning("ReportLab not available. Cannot create PDF document.")
+        return None
+    
+    try:
+        # Create buffer
+        buffer = io.BytesIO()
+        
+        # Create document
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            spaceAfter=30,
+            alignment=1,  # Center alignment
+            textColor='black'
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=14,
+            spaceAfter=12,
+            spaceBefore=12,
+            textColor='black'
+        )
+        
+        # Parse content
+        lines = [line.strip() for line in text_content.strip().split('\n') if line.strip()]
+        
+        # Extract name and job title
+        name = ""
+        job_title = ""
+        content_start_idx = 0
+        
+        for i, line in enumerate(lines[:3]):
+            if i == 0:
+                if any(keyword in line.lower() for keyword in ['engineer', 'developer', 'manager', 'analyst', 'specialist']):
+                    job_title = line
+                    content_start_idx = 1
+                else:
+                    name = line
+                    content_start_idx = 1
+            elif i == 1 and not job_title:
+                if any(keyword in line.lower() for keyword in ['engineer', 'developer', 'manager', 'analyst', 'specialist']):
+                    job_title = line
+                    content_start_idx = 2
+                else:
+                    content_start_idx = 1
+                    break
+        
+        # Add name as title
+        if name:
+            story.append(Paragraph(name, title_style))
+        
+        # Add job title
+        if job_title:
+            story.append(Paragraph(job_title, styles['Normal']))
+            story.append(Spacer(1, 20))
+        
+        # Process remaining content
+        for line in lines[content_start_idx:]:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check if section header
+            if (line.endswith(':') and len(line) < 60 and 
+                any(keyword in line.lower() for keyword in ['experience', 'education', 'skills', 'summary'])):
+                story.append(Spacer(1, 12))
+                story.append(Paragraph(line, heading_style))
+            else:
+                story.append(Paragraph(line, styles['Normal']))
+                story.append(Spacer(1, 6))
+        
+        # Build PDF
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+        
+    except Exception as e:
+        st.error(f"Error creating PDF with ReportLab: {str(e)}")
+        return None
+
+
+def modify_pdf_with_pymupdf(
+    original_file_bytes: bytes, 
+    customization_text: str, 
+    original_filename: str = ""
+) -> Optional[io.BytesIO]:
+    """Modify PDF using PyMuPDF by replacing content while preserving some layout"""
+    if not PYMUPDF_AVAILABLE:
+        st.warning("PyMuPDF not available. Cannot modify PDF document.")
+        return create_pdf_from_text_reportlab(customization_text, original_filename)
+    
+    try:
+        # Open original PDF to get styling context
+        original_doc = fitz.open(stream=original_file_bytes, filetype="pdf")
+        
+        # Create new PDF document
+        new_doc = fitz.open()  # Create empty PDF
+        
+        # Get page size from original (if available)
+        page_width = 612  # Default letter width
+        page_height = 792  # Default letter height
+        
+        if len(original_doc) > 0:
+            original_page = original_doc[0]
+            page_rect = original_page.rect
+            page_width = page_rect.width
+            page_height = page_rect.height
+        
+        # Create new page
+        new_page = new_doc.new_page(width=page_width, height=page_height)
+        
+        # Parse customized text
+        lines = [line.strip() for line in customization_text.strip().split('\n') if line.strip()]
+        
+        # Starting position
+        y_position = page_height - 72  # Start 1 inch from top
+        margin = 72  # 1 inch margin
+        line_height = 14
+        
+        # Extract name and job title
+        name = ""
+        job_title = ""
+        content_start_idx = 0
+        
+        for i, line in enumerate(lines[:3]):
+            if i == 0:
+                if any(keyword in line.lower() for keyword in ['engineer', 'developer', 'manager', 'analyst', 'specialist']):
+                    job_title = line
+                    content_start_idx = 1
+                else:
+                    name = line
+                    content_start_idx = 1
+            elif i == 1 and not job_title:
+                if any(keyword in line.lower() for keyword in ['engineer', 'developer', 'manager', 'analyst', 'specialist']):
+                    job_title = line
+                    content_start_idx = 2
+                else:
+                    content_start_idx = 1
+                    break
+        
+        # Add name (larger, centered)
+        if name:
+            text_rect = fitz.Rect(margin, y_position - 20, page_width - margin, y_position)
+            new_page.insert_text(
+                (page_width/2, y_position), 
+                name, 
+                fontsize=18, 
+                fontname="helv-bold",
+                color=(0, 0, 0)
+            )
+            y_position -= 30
+        
+        # Add job title (centered, smaller)
+        if job_title:
+            new_page.insert_text(
+                (page_width/2, y_position), 
+                job_title, 
+                fontsize=14, 
+                fontname="helv-oblique",
+                color=(0, 0, 0)
+            )
+            y_position -= 25
+        
+        # Add remaining content
+        for line in lines[content_start_idx:]:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check if we need a new page
+            if y_position < 72:  # 1 inch from bottom
+                new_page = new_doc.new_page(width=page_width, height=page_height)
+                y_position = page_height - 72
+            
+            # Check if section header
+            if (line.endswith(':') and len(line) < 60 and 
+                any(keyword in line.lower() for keyword in ['experience', 'education', 'skills', 'summary'])):
+                y_position -= 10  # Extra space before section
+                new_page.insert_text(
+                    (margin, y_position), 
+                    line, 
+                    fontsize=12, 
+                    fontname="helv-bold",
+                    color=(0, 0, 0)
+                )
+                y_position -= line_height
+            else:
+                # Regular text
+                new_page.insert_text(
+                    (margin, y_position), 
+                    line, 
+                    fontsize=10, 
+                    fontname="helv",
+                    color=(0, 0, 0)
+                )
+                y_position -= line_height
+        
+        # Save to buffer
+        buffer = io.BytesIO()
+        new_doc.save(buffer)
+        new_doc.close()
+        original_doc.close()
+        
+        buffer.seek(0)
+        return buffer
+        
+    except Exception as e:
+        st.error(f"Error modifying PDF with PyMuPDF: {str(e)}")
+        # Fall back to ReportLab
+        return create_pdf_from_text_reportlab(customization_text, original_filename)
+
+
+def modify_original_resume_document(
+    original_file_bytes: bytes, 
+    customization_text: str, 
+    original_filename: str = ""
+) -> Optional[io.BytesIO]:
+    """Modify the original resume document while preserving styling"""
+    file_extension = get_resume_file_extension(original_filename)
+    
+    if file_extension == "docx":
+        return modify_original_word_document(original_file_bytes, customization_text, original_filename)
+    elif file_extension == "pdf":
+        # Try PyMuPDF first, fall back to ReportLab if needed
+        return modify_pdf_with_pymupdf(original_file_bytes, customization_text, original_filename)
+    else:
+        st.warning(f"Unsupported file format: {file_extension}. Only PDF and DOCX are supported for customization.")
+        return None
+
+
+def parse_resume_modifications(ai_response: str) -> Dict[str, Any]:
+    """Parse the AI response containing resume modifications"""
+    try:
+        # Try to parse the JSON directly
+        modifications_data = json.loads(ai_response)
+        
+        # Validate the structure
+        if "modifications" in modifications_data and isinstance(modifications_data["modifications"], list):
+            return {"success": True, "data": modifications_data}
+        else:
+            return {"success": False, "error": "Invalid modifications format"}
+            
+    except json.JSONDecodeError:
+        # Try to extract JSON from markdown
+        try:
+            json_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
+            match = re.search(json_pattern, ai_response)
+            
+            if match:
+                json_str = match.group(1)
+                # Remove trailing commas before parsing JSON
+                json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+                # Replace null-like entries for "original" and "new" with empty strings  
+                json_str = re.sub(r'"original"\s*:\s*,', '"original": "",', json_str)
+                json_str = re.sub(r'"new"\s*:\s*,', '"new": "",', json_str)
+                
+                modifications_data = json.loads(json_str)
+                
+                if "modifications" in modifications_data and isinstance(modifications_data["modifications"], list):
+                    return {"success": True, "data": modifications_data}
+                else:
+                    return {"success": False, "error": "Invalid modifications format in extracted JSON"}
+            else:
+                return {"success": False, "error": "No JSON found in response"}
+                
+        except json.JSONDecodeError:
+            return {"success": False, "error": "Failed to parse JSON from response"}
+
+
+def apply_resume_modifications_to_document(
+    original_file_bytes: bytes, 
+    original_text: str, 
+    modifications: List[Dict[str, str]], 
+    filename: str
+) -> Tuple[Optional[io.BytesIO], List[str]]:
+    """Apply modifications directly to the original document while preserving formatting"""
+    applied_changes = []
+    
+    try:
+        file_extension = get_resume_file_extension(filename)
+        
+        if file_extension == "pdf":
+            return apply_modifications_to_pdf(original_file_bytes, original_text, modifications, filename)
+        elif file_extension == "docx":
+            return apply_modifications_to_docx(original_file_bytes, original_text, modifications, filename)
+        else:
+            applied_changes.append(f"❌ Unsupported file format: {file_extension}")
+            return None, applied_changes
+            
+    except Exception as e:
+        applied_changes.append(f"❌ ERROR applying modifications to document: {str(e)}")
+        return None, applied_changes
+
+
+def apply_modifications_to_docx(
+    original_file_bytes: bytes, 
+    original_text: str, 
+    modifications: List[Dict[str, str]], 
+    filename: str
+) -> Tuple[Optional[io.BytesIO], List[str]]:
+    """Apply modifications to DOCX document while preserving formatting"""
+    if not DOCX_AVAILABLE:
+        return None, ["❌ python-docx not available"]
+    
+    applied_changes = []
+    
+    try:
+        # Load the original document
+        doc = Document(io.BytesIO(original_file_bytes))
+        
+        # Sort modifications by action priority
+        action_priority = {"REMOVE": 1, "REPLACE": 2, "ADD": 3, "REORDER": 4}
+        sorted_modifications = sorted(modifications, key=lambda x: action_priority.get(x.get("action", ""), 5))
+        
+        # Apply modifications
+        for mod in sorted_modifications:
+            action = mod.get("action", "").upper()
+            original_text_to_find = mod.get("original", "")
+            new_text = mod.get("new", "")
+            reason = mod.get("reason", "")
+            
+            if action == "REPLACE" and original_text_to_find and new_text:
+                modified = False
+                # Search through all paragraphs
+                for paragraph in doc.paragraphs:
+                    if original_text_to_find in paragraph.text:
+                        # Preserve formatting by replacing text while keeping runs
+                        full_text = paragraph.text
+                        new_full_text = full_text.replace(original_text_to_find, new_text)
+                        
+                        # Clear paragraph and add new text
+                        paragraph.clear()
+                        paragraph.add_run(new_full_text)
+                        
+                        applied_changes.append(f"✅ REPLACED in document: '{original_text_to_find[:30]}...' with '{new_text[:30]}...'")
+                        modified = True
+                        break
+                
+                # Also check tables
+                if not modified:
+                    for table in doc.tables:
+                        for row in table.rows:
+                            for cell in row.cells:
+                                if original_text_to_find in cell.text:
+                                    for paragraph in cell.paragraphs:
+                                        if original_text_to_find in paragraph.text:
+                                            full_text = paragraph.text
+                                            new_full_text = full_text.replace(original_text_to_find, new_text)
+                                            paragraph.clear()
+                                            paragraph.add_run(new_full_text)
+                                            applied_changes.append(f"✅ REPLACED in table: '{original_text_to_find[:30]}...' with '{new_text[:30]}...'")
+                                            modified = True
+                                            break
+                                if modified:
+                                    break
+                            if modified:
+                                break
+                        if modified:
+                            break
+                
+                if not modified:
+                    applied_changes.append(f"⚠️ SKIPPED REPLACE: Text not found in document: '{original_text_to_find[:30]}...'")
+            
+            elif action == "ADD" and new_text:
+                # Add new content at the end of the document
+                doc.add_paragraph(new_text)
+                applied_changes.append(f"✅ ADDED to document: '{new_text[:50]}...'")
+            
+            elif action == "REMOVE" and original_text_to_find:
+                modified = False
+                # Search and remove from paragraphs
+                for paragraph in doc.paragraphs:
+                    if original_text_to_find in paragraph.text:
+                        full_text = paragraph.text
+                        new_full_text = full_text.replace(original_text_to_find, "")
+                        paragraph.clear()
+                        if new_full_text.strip():  # Only add back if there's remaining text
+                            paragraph.add_run(new_full_text)
+                        applied_changes.append(f"✅ REMOVED from document: '{original_text_to_find[:30]}...'")
+                        modified = True
+                        break
+                
+                if not modified:
+                    applied_changes.append(f"⚠️ SKIPPED REMOVE: Text not found in document: '{original_text_to_find[:30]}...'")
+        
+        # Save modified document
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+        
+        return doc_buffer, applied_changes
+        
+    except Exception as e:
+        applied_changes.append(f"❌ ERROR modifying DOCX: {str(e)}")
+        return None, applied_changes
+
+
+def apply_modifications_to_pdf(
+    original_file_bytes: bytes, 
+    original_text: str, 
+    modifications: List[Dict[str, str]], 
+    filename: str
+) -> Tuple[Optional[io.BytesIO], List[str]]:
+    """Apply modifications to PDF document while preserving formatting"""
+    applied_changes = []
+    
+    # For PDF, we need to create a new document since direct text editing is complex
+    # We'll apply text modifications first, then create a styled PDF
+    try:
+        modified_text = original_text
+        
+        # Sort modifications by action priority
+        action_priority = {"REMOVE": 1, "REPLACE": 2, "ADD": 3, "REORDER": 4}
+        sorted_modifications = sorted(modifications, key=lambda x: action_priority.get(x.get("action", ""), 5))
+        
+        # Apply text modifications
+        for mod in sorted_modifications:
+            action = mod.get("action", "").upper()
+            original_text_to_find = mod.get("original", "")
+            new_text = mod.get("new", "")
+            
+            if action == "REPLACE" and original_text_to_find and new_text:
+                if original_text_to_find in modified_text:
+                    modified_text = modified_text.replace(original_text_to_find, new_text)
+                    applied_changes.append(f"✅ REPLACED in PDF: '{original_text_to_find[:30]}...' with '{new_text[:30]}...'")
+                else:
+                    applied_changes.append(f"⚠️ SKIPPED REPLACE: Text not found: '{original_text_to_find[:30]}...'")
+            
+            elif action == "REMOVE" and original_text_to_find:
+                if original_text_to_find in modified_text:
+                    modified_text = modified_text.replace(original_text_to_find, "")
+                    applied_changes.append(f"✅ REMOVED from PDF: '{original_text_to_find[:30]}...'")
+                else:
+                    applied_changes.append(f"⚠️ SKIPPED REMOVE: Text not found: '{original_text_to_find[:30]}...'")
+            
+            elif action == "ADD" and new_text:
+                modified_text += "\n" + new_text
+                applied_changes.append(f"✅ ADDED to PDF: '{new_text[:50]}...'")
+        
+        # Create new PDF with modified text using PyMuPDF (preserves some styling)
+        if PYMUPDF_AVAILABLE:
+            pdf_buffer = modify_pdf_with_pymupdf(original_file_bytes, modified_text, filename)
+            if pdf_buffer:
+                return pdf_buffer, applied_changes
+        
+        # Fallback to ReportLab
+        if REPORTLAB_AVAILABLE:
+            pdf_buffer = create_pdf_from_text_reportlab(modified_text, filename)
+            if pdf_buffer:
+                applied_changes.append("ℹ️ Created new PDF with ReportLab (basic styling)")
+                return pdf_buffer, applied_changes
+        
+        applied_changes.append("❌ No PDF creation libraries available")
+        return None, applied_changes
+        
+    except Exception as e:
+        applied_changes.append(f"❌ ERROR modifying PDF: {str(e)}")
+        return None, applied_changes
+
+
+def apply_resume_modifications(original_resume: str, modifications: List[Dict[str, str]]) -> Tuple[str, List[str]]:
+    """Apply the suggested modifications to the original resume text (fallback method)"""
+    modified_resume = original_resume
+    applied_changes = []
+    
+    # Sort modifications by action priority: REMOVE first, then REPLACE, then ADD, then REORDER
+    action_priority = {"REMOVE": 1, "REPLACE": 2, "ADD": 3, "REORDER": 4}
+    sorted_modifications = sorted(modifications, key=lambda x: action_priority.get(x.get("action", ""), 5))
+    
+    for mod in sorted_modifications:
+        action = mod.get("action", "").upper()
+        location = mod.get("location", "")
+        original_text = mod.get("original", "")
+        new_text = mod.get("new", "")
+        reason = mod.get("reason", "")
+        
+        try:
+            if action == "REPLACE" and original_text and new_text:
+                if original_text in modified_resume:
+                    modified_resume = modified_resume.replace(original_text, new_text)
+                    applied_changes.append(f"✅ REPLACED: '{original_text[:50]}...' with '{new_text[:50]}...'")
+                else:
+                    applied_changes.append(f"⚠️ SKIPPED REPLACE: Original text not found: '{original_text[:50]}...'")
+                    
+            elif action == "REMOVE" and original_text:
+                if original_text in modified_resume:
+                    modified_resume = modified_resume.replace(original_text, "")
+                    applied_changes.append(f"✅ REMOVED: '{original_text[:50]}...'")
+                else:
+                    applied_changes.append(f"⚠️ SKIPPED REMOVE: Text not found: '{original_text[:50]}...'")
+                    
+            elif action == "ADD" and new_text:
+                # For ADD operations, we'll append to the end of the specified section or resume
+                if location.lower() in ["end", "bottom", "resume end"]:
+                    modified_resume += "\n" + new_text
+                    applied_changes.append(f"✅ ADDED at end: '{new_text[:50]}...'")
+                else:
+                    # Try to find the section and add after it
+                    section_patterns = [
+                        f"{location}:",
+                        location.upper() + ":",
+                        location.title() + ":"
+                    ]
+                    
+                    added = False
+                    for pattern in section_patterns:
+                        if pattern in modified_resume:
+                            # Find the end of the section
+                            section_start = modified_resume.find(pattern)
+                            next_section = modified_resume.find("\n\n", section_start + len(pattern))
+                            
+                            if next_section == -1:
+                                # Add at end of resume
+                                modified_resume += "\n" + new_text
+                            else:
+                                # Insert before next section
+                                modified_resume = modified_resume[:next_section] + "\n" + new_text + modified_resume[next_section:]
+                            
+                            applied_changes.append(f"✅ ADDED to {location}: '{new_text[:50]}...'")
+                            added = True
+                            break
+                    
+                    if not added:
+                        # Fallback: add at end
+                        modified_resume += "\n" + new_text
+                        applied_changes.append(f"✅ ADDED at end (section not found): '{new_text[:50]}...'")
+                        
+            elif action == "REORDER":
+                # REORDER is complex and depends on the specific implementation
+                # For now, we'll note it but not implement automatic reordering
+                applied_changes.append(f"ℹ️ REORDER suggested for {location}: {reason}")
+                
+            else:
+                applied_changes.append(f"⚠️ UNSUPPORTED ACTION: {action}")
+                
+        except Exception as e:
+            applied_changes.append(f"❌ ERROR applying {action}: {str(e)}")
+    
+    return modified_resume, applied_changes
+
+
+def generate_customized_resume(
+    original_resume: str,
+    job_description: str,
+    model: str = DEFAULT_MODEL,
+) -> Dict[str, Any]:
+    """Generate a customized resume by applying AI-suggested modifications to the original resume"""
+    global request_in_progress, cancel_request
+
+    try:
+        # Set request in progress flag
+        request_in_progress = True
+        cancel_request = False
+
+        # Check API server status
+        api_server_running = check_api_server_status()
+
+        # Create prompt
+        prompt = create_resume_modification_prompt(original_resume, job_description)
+
+        # Get client for API request
+        client = get_ai_client()
+
+        # Generate response
+        result = ""
+        if api_server_running and hasattr(client, "chat"):
+            # Using OpenAI-compatible API
+            st.info(f"Analyzing resume for improvements using AI model: {model}...")
+
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional resume writer and career coach. Analyze resumes and suggest specific, targeted modifications to improve job alignment while maintaining complete accuracy and truthfulness."
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,  # Lower temperature for more consistent, precise suggestions
+                )
+
+                result = response.choices[0].message.content
+            except Exception as api_error:
+                st.error(f"API error: {str(api_error)}")
+                # Fall back to direct g4f
+                api_server_running = False
+
+        if not api_server_running:
+            # Using g4f directly as fallback
+            st.warning("Using g4f directly for resume analysis (this may take longer)...")
+
+            try:
+                import g4f
+
+                g4f_model = get_g4f_model_from_name(model)
+                if not g4f_model:
+                    return {"success": False, "error": "Failed to get g4f model"}
+
+                result = g4f.ChatCompletion.create(
+                    model=g4f_model,
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional resume writer and career coach. Analyze resumes and suggest specific, targeted modifications to improve job alignment while maintaining complete accuracy and truthfulness."
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                )
+            except Exception as g4f_error:
+                st.error(f"Error using g4f directly: {str(g4f_error)}")
+                return {"success": False, "error": str(g4f_error)}
+
+        # Check if request was cancelled
+        if cancel_request:
+            return {"success": False, "error": "Request cancelled by user"}
+
+        # Parse the modifications from AI response
+        if result and result.strip():
+            st.warning("Raw AI response:")
+            st.text(result.strip())
+
+            parse_result = parse_resume_modifications(result.strip())
+            
+            if not parse_result["success"]:
+                return {"success": False, "error": f"Failed to parse modifications: {parse_result['error']}"}
+            
+            modifications_data = parse_result["data"]
+            modifications = modifications_data.get("modifications", [])
+            summary = modifications_data.get("summary", "")
+            
+            if not modifications:
+                return {"success": False, "error": "No modifications suggested by AI"}
+            
+            # Apply modifications to the original resume text (for display purposes)
+            st.info(f"Applying {len(modifications)} suggested modifications...")
+            customized_resume, applied_changes = apply_resume_modifications(original_resume, modifications)
+            
+            # Show what changes were applied
+            if applied_changes:
+                st.info("Changes applied:")
+                for change in applied_changes:
+                    if change.startswith("✅"):
+                        st.success(change)
+                    elif change.startswith("⚠️"):
+                        st.warning(change)
+                    elif change.startswith("❌"):
+                        st.error(change)
+                    else:
+                        st.info(change)
+            
+            return {
+                "success": True, 
+                "customized_resume": customized_resume,
+                "modifications": modifications,
+                "applied_changes": applied_changes,
+                "summary": summary,
+                "original_resume_text": original_resume,  # Store for document processing
+                "message": f"Applied {len([c for c in applied_changes if c.startswith('✅')])} modifications successfully!"
+            }
+        else:
+            return {"success": False, "error": "Empty response from AI model"}
+
+    except Exception as e:
+        st.error(f"Error in generate_customized_resume: {str(e)}")
+        st.error(traceback.format_exc())
+        return {"success": False, "error": str(e)}
+    finally:
+        # Reset request in progress flag
+        request_in_progress = False
+
+
+def create_complete_customized_resume_prompt(
+    original_resume: str,
+    job_description: str,
+) -> str:
+    """Create prompt for generating a complete customized resume with proper structure"""
+    return f"""
+    Create a complete, professionally structured resume that is specifically tailored to the job description provided. The goal is to optimize the resume for this specific role while maintaining complete truthfulness and accuracy.
+
+    ## Original Resume:
+    {original_resume}
+    
+    ## Job Description:
+    {job_description}
+    
+    Please create a customized resume with the following structure:
+    
+    **Required Structure:**
+    1. **Full Name** (from original resume)
+    2. **Professional Job Title** - Create a targeted job title that aligns with the position being applied for, based on the candidate's actual experience and capabilities
+    3. **Professional Summary** - Write a compelling 2-3 sentence summary that highlights the candidate's most relevant experience, skills, and achievements for this specific role. Use keywords from the job description where appropriate.
+    4. **Contact Information** (if present in original)
+    5. **Core Skills/Technical Skills** - Reorganize and highlight the most relevant skills for this position
+    6. **Professional Experience** - Reorder and emphasize the most relevant experience, optimizing bullet points with job-specific keywords
+    7. **Education** - Include education information as in original
+    8. **Additional sections** - Include any other sections from original resume (certifications, projects, etc.)
+    
+    **Key Requirements:**
+    - **Job Title**: Must reflect what the candidate can actually do based on their experience (e.g., if they have 3+ years of software development experience and are applying for a "Senior Software Engineer" role, use that title)
+    - **Professional Summary**: Must be specific to this role, compelling, and include relevant keywords from the job description
+    - **Content Truthfulness**: Do NOT add any experience, skills, or achievements that weren't in the original resume
+    - **Keyword Optimization**: Use industry-standard keywords from the job description where they accurately reflect the candidate's experience
+    - **Relevance Prioritization**: Reorder sections and bullet points to emphasize the most relevant information first
+    - **Professional Presentation**: Maintain professional tone and clear structure
+    
+    **Examples of Good Job Titles based on experience:**
+    - "Software Engineer" → "Full Stack Developer" (if applying for full stack role)
+    - "Marketing Coordinator" → "Digital Marketing Specialist" (if applying for digital marketing role)
+    - "Data Analyst" → "Senior Data Analyst" (if they have 3+ years experience)
+    
+    **Professional Summary Examples:**
+    - "Results-driven Software Engineer with 4+ years of experience developing scalable web applications using React, Node.js, and Python. Proven track record of delivering high-quality solutions in Agile environments and collaborating effectively with cross-functional teams."
+    - "Digital Marketing Professional with expertise in SEO, content marketing, and social media strategy. Successfully increased organic traffic by 150% and generated $2M in revenue through integrated marketing campaigns."
+    
+    Return ONLY the complete customized resume text, properly formatted and ready to be saved as a document. Do not include any additional explanations or comments.
+    """
+
+
+def generate_complete_customized_resume(
+    original_resume: str,
+    job_description: str,
+    model: str = DEFAULT_MODEL,
+) -> Dict[str, Any]:
+    """Generate a complete customized resume with proper structure including job title and summary"""
+    global request_in_progress, cancel_request
+
+    try:
+        # Set request in progress flag
+        request_in_progress = True
+        cancel_request = False
+
+        # Check API server status
+        api_server_running = check_api_server_status()
+
+        # Create prompt for complete resume generation
+        prompt = create_complete_customized_resume_prompt(original_resume, job_description)
+
+        # Get client for API request
+        client = get_ai_client()
+
+        # Generate response
+        result = ""
+        if api_server_running and hasattr(client, "chat"):
+            # Using OpenAI-compatible API
+            st.info(f"Generating complete customized resume using AI model: {model}...")
+
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional resume writer and career coach. Create complete, well-structured resumes that are specifically tailored to job descriptions while maintaining complete accuracy and truthfulness. Always include a targeted job title and compelling professional summary."
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,  # Lower temperature for more consistent, precise results
+                )
+
+                result = response.choices[0].message.content
+            except Exception as api_error:
+                st.error(f"API error: {str(api_error)}")
+                # Fall back to direct g4f
+                api_server_running = False
+
+        if not api_server_running:
+            # Using g4f directly as fallback
+            st.warning("Using g4f directly for resume generation (this may take longer)...")
+
+            try:
+                import g4f
+
+                g4f_model = get_g4f_model_from_name(model)
+                if not g4f_model:
+                    return {"success": False, "error": "Failed to get g4f model"}
+
+                result = g4f.ChatCompletion.create(
+                    model=g4f_model,
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a professional resume writer and career coach. Create complete, well-structured resumes that are specifically tailored to job descriptions while maintaining complete accuracy and truthfulness. Always include a targeted job title and compelling professional summary."
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                )
+            except Exception as g4f_error:
+                st.error(f"Error using g4f directly: {str(g4f_error)}")
+                return {"success": False, "error": str(g4f_error)}
+
+        # Check if request was cancelled
+        if cancel_request:
+            return {"success": False, "error": "Request cancelled by user"}
+
+        # Return the complete customized resume
+        if result and result.strip():
+            customized_resume = result.strip()
+            
+            return {
+                "success": True, 
+                "customized_resume": customized_resume,
+                "message": "Complete customized resume generated successfully with targeted job title and professional summary!"
+            }
+        else:
+            return {"success": False, "error": "Empty response from AI model"}
+
+    except Exception as e:
+        st.error(f"Error in generate_complete_customized_resume: {str(e)}")
+        st.error(traceback.format_exc())
+        return {"success": False, "error": str(e)}
+    finally:
+        # Reset request in progress flag
+        request_in_progress = False

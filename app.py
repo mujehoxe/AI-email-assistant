@@ -40,6 +40,14 @@ if "resume_content" not in st.session_state:
     st.session_state.resume_content = ""
 if "resume_filename" not in st.session_state:
     st.session_state.resume_filename = ""
+if "customized_resume" not in st.session_state:
+    st.session_state.customized_resume = ""
+if "use_customized_resume" not in st.session_state:
+    st.session_state.use_customized_resume = False
+if "customized_resume_docx" not in st.session_state:
+    st.session_state.customized_resume_docx = None
+if "customized_resume_filename" not in st.session_state:
+    st.session_state.customized_resume_filename = ""
 
 # Initialize other session state variables
 if "recipient_email" not in st.session_state:
@@ -88,7 +96,3 @@ if template_names:
 
 # Render main form
 render_email_form()
-
-# Footer
-st.markdown("---")
-st.markdown("Created by Oussama")

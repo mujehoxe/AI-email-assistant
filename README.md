@@ -4,14 +4,62 @@ An AI-powered application to help create personalized job application emails bas
 
 ## Features
 
-- Upload your resume (PDF, DOCX) and automatically extract text
-- Generate personalized emails based on job descriptions
-- Persist resume data between sessions
-- Extract company name, contact name, and email from job descriptions
-- Save and manage email templates
-- Select from multiple AI models (requires G4F API server)
-- Directly send emails from the application
-- Copy generated email to clipboard
+- **Resume Processing**: Upload your resume (PDF, DOCX) and automatically extract text
+- **AI Resume Customization**: Generate tailored resumes that match specific job descriptions
+- **Personalized Email Generation**: Create custom job application emails based on job descriptions and your resume
+- **Smart Information Extraction**: Automatically extract company name, contact name, and email from job descriptions
+- **Resume & Email Management**: Persist resume data between sessions and save email templates
+- **Multiple AI Models**: Select from various AI models (requires G4F API server)
+- **Direct Email Sending**: Send emails directly from the application with resume attachments
+- **Easy Export**: Download customized resumes and copy generated emails to clipboard
+
+## How to Use
+
+### Multi-Page Interface Workflow
+
+The application features a clean, organized 5-tab interface that guides you through the complete process:
+
+#### **📄 Tab 1: Resume Upload**
+1. **Upload Resume**: Upload your resume in PDF or DOCX format
+2. **Preview Content**: Review extracted text from your resume
+3. **Manage Files**: Clear or replace your resume as needed
+
+#### **📝 Tab 2: Job Description**
+1. **Enter Job Description**: Paste the complete job description you're applying for
+2. **Quick Analysis**: View automatically detected company, contact info, and word count
+3. **Validation**: System ensures job description is complete before proceeding
+
+#### **🎯 Tab 3: Resume Customization**
+1. **AI Customization**: Generate a tailored resume that matches the job description
+   - Reorganizes and emphasizes relevant experience
+   - Adds professional summary and relevant job title
+   - Incorporates keywords from the job description
+   - **Smart Format Preservation**: Maintains Word document format if original is DOCX
+2. **Choose Version**: Select between original or customized resume
+3. **Download Options**: Export as text or professionally formatted Word document
+
+#### **📧 Tab 4: Template Generation**
+1. **AI Model Selection**: Choose from available AI models for template generation
+2. **Resume Selection**: Confirm which resume version to use (original or customized)
+3. **Generate Template**: Create personalized email template with extracted information
+4. **Template Preview**: Review the generated greeting, body, and signature
+
+#### **✉️ Tab 5: Email Sending**
+1. **Configure Recipients**: Add email, name, company, and position details
+2. **Customize Content**: Edit the email subject, greeting, body, and signature
+3. **Smart Attachments**: Automatically attaches the appropriate resume format
+4. **Send or Export**: Send email directly or copy content to clipboard
+5. **Save Template**: Save successful templates for future use
+
+### Key Benefits of Resume Customization
+
+- **Better ATS Matching**: Incorporates relevant keywords from job descriptions
+- **Targeted Positioning**: Highlights your most relevant experience for each role
+- **Professional Summary**: Adds a compelling summary tailored to the specific position
+- **Smart Format Preservation**: Maintains Word document format when original is DOCX
+- **Multiple Export Options**: Download as text or Word document for flexibility
+- **Truthful Enhancement**: Only reorganizes and emphasizes existing information - never fabricates experience
+- **Streamlined Workflow**: Organized multi-tab interface for better user experience
 
 ## Setup Instructions
 
@@ -85,3 +133,31 @@ Then configure `G4F_API_HOST` and `G4F_API_PORT` in your `.env` file to point to
 
 - Make sure PyPDF2 and python-docx are installed correctly
 - Only PDF and DOCX formats are supported
+
+### Resume Customization
+
+- Ensure both your resume and job description are provided before generating customized resume
+- If customization fails, try using a different AI model from the dropdown
+- The AI only reorganizes existing information - it won't add fake experience or skills
+- You can always switch back to your original resume using the radio buttons
+
+### Document Format Support
+
+#### Word Document (DOCX) Features
+- **Format Detection**: The system automatically detects if your original resume is a Word document
+- **Styling Preservation**: Maintains original formatting, fonts, and structure while updating content
+- **Smart Output**: Customized version preserves the document's professional appearance
+- **Email Attachments**: When sending emails, the system will attach the Word version if available
+
+#### PDF Document Features
+- **Advanced PDF Processing**: Uses PyMuPDF for sophisticated PDF manipulation
+- **Layout Preservation**: Maintains page dimensions and basic layout from original PDF
+- **Multiple Approaches**: 
+  - **PyMuPDF Method**: Preserves page size and creates new styled content
+  - **ReportLab Fallback**: Creates professional PDF if direct modification fails
+- **Font and Spacing**: Attempts to maintain professional typography and spacing
+
+#### Universal Features
+- **Fallback Support**: If document modification fails, a text version will be provided
+- **Download Options**: Multiple format download buttons appear when applicable
+- **Original Preservation**: Your original file is never modified, only copied and customized

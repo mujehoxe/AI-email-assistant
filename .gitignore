@@ -4,4 +4,8 @@ __pycache__/
 *$py.class
 .streamlit/
 venv/
-env/ 
+env/
+templates/
+fresh_env
+data/
+data/resume_data.pkl

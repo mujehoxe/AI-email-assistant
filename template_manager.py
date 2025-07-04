@@ -104,25 +104,6 @@ def get_template(name):
 
 def render_template_sidebar():
     """Render the template sidebar"""
-    st.sidebar.header("Template Library")
-
-    # Template selection in sidebar
-    if st.session_state.templates:
-        selected_template = st.sidebar.selectbox(
-            "Select a template", options=list(st.session_state.templates.keys())
-        )
-
-        if selected_template:
-            # Auto-load template when selected
-            if st.sidebar.button("Load Selected Template"):
-                if load_template(selected_template):
-                    st.sidebar.success(f"Template '{selected_template}' loaded!")
-                    st.rerun()
-
-            # Delete button
-            if st.sidebar.button("Delete Selected Template"):
-                delete_template(selected_template)
-                st.sidebar.warning(f"Template '{selected_template}' deleted!")
-                st.rerun()
-    else:
-        st.sidebar.info("No saved templates yet")
+    # This function is kept for compatibility but template selection
+    # is now handled in app.py to avoid duplication
+    pass
